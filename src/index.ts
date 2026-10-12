@@ -30,12 +30,14 @@ export async function main(): Promise<number> {
     port: config.port,
     registry,
     logger,
+    webUi: config.webUi,
   });
 
   const address = await server.start();
   logger.info('server.started', {
     host: address.host,
     port: address.port,
+    webUi: config.webUi,
     endpoints: [
       'POST /v1/report',
       'POST /v1/report/batch',
@@ -43,6 +45,7 @@ export async function main(): Promise<number> {
       'GET /v1/agents/:uuid',
       'GET /v1/agents/:uuid/history?state=&limit=&since=',
       'GET /v1/health',
+      ...(config.webUi ? ['GET / (Web UI)', 'GET /ui (Web UI)'] : []),
     ],
     registryPath,
   });

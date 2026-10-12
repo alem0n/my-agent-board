@@ -13,8 +13,10 @@
  *   GET  /v1/agents/:uuid        单 agent 注册记录 + 逐状态最新载荷
  *   GET  /v1/agents/:uuid/history?state=&limit=&since=   历史记录
  *   GET  /v1/health              健康检查
+ *   GET  / 或 /ui                内置 Web UI（仅 --web 启用时；否则 404）
  */
 import * as http from 'node:http';
+import { WEB_UI_HTML } from './web-ui-asset.js';
 import type { AgentRegistry } from '../services/registry.js';
 import type { BoardLogger } from '../domain/logging.js';
 import { PROTOCOL_VERSION, type BatchRequest, type ReportEnvelope } from '../domain/contracts.js';
@@ -33,6 +35,8 @@ export interface BoardServerOptions {
   now?: () => number;
   /** 报告允许的最大滞后（默认 7 天）。 */
   maxReportAgeMs?: number;
+  /** 挂载内置 Web UI 到 / 与 /ui（默认关闭）。 */
+  webUi?: boolean;
 }
 
 interface RouteResult {
@@ -60,6 +64,7 @@ export class BoardHttpServer {
     this.options = {
       now: options.now ?? (() => Date.now()),
       maxReportAgeMs: options.maxReportAgeMs ?? 7 * 24 * 60 * 60 * 1000,
+      webUi: options.webUi ?? false,
     };
   }
 
@@ -112,6 +117,10 @@ export class BoardHttpServer {
       const method = request.method ?? 'GET';
       const path = url.pathname;
 
+      if (this.options.webUi && (path === '/' || path === '/ui') && method === 'GET') {
+        this.writeHtml(response, WEB_UI_HTML);
+        return;
+      }
       if (path === '/v1/health' && method === 'GET') {
         this.writeJson(response, 200, this.healthBody());
         return;
@@ -144,6 +153,7 @@ export class BoardHttpServer {
       }
 
       const knownPath =
+        (this.options.webUi && (path === '/' || path === '/ui')) ||
         path === '/v1/health' ||
         path === '/v1/agents' ||
         path === '/v1/report' ||
@@ -166,6 +176,14 @@ export class BoardHttpServer {
       this.logger.error('server.requestError', { error: String(error) });
       this.writeJson(response, 500, this.errorBody(ERROR_CODES.INTERNAL, 'internal server error'));
     }
+  }
+
+  private writeHtml(response: http.ServerResponse, body: string): void {
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': Buffer.byteLength(body, 'utf8'),
+    });
+    response.end(body);
   }
 
   private async handleSingleReport(request: http.IncomingMessage): Promise<RouteResult> {

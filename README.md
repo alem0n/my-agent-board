@@ -62,9 +62,12 @@ KEEP_DATA=1 pnpm demo
 ```bash
 pnpm dev          # 默认 127.0.0.1:7878，数据目录 ./data
 pnpm dev -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=debug
+pnpm dev -- --web      # 挂载内置 Web UI（GET / 与 /ui）
 ```
 
-参数：`--port`、`--host`、`--data-dir`、`--log-level`。非法值自动回退默认并记录日志。
+参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。非法值自动回退默认并记录日志。
+
+Web UI 为**开关参数、默认关闭**：你需要可视化时加 `--web`（同端口 `/` 与 `/ui`，自动刷新 3s，零外部资源）；想用自己的可视化（Grafana、自写面板……）时不开即可，直接消费 `/v1/*` JSON API。
 
 ### 2. server API
 
