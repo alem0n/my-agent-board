@@ -1,6 +1,0 @@
-# pnpm 配置（pnpm 10.16+ 起 settings 统一在此声明，不再读 package.json 的 "pnpm" 字段）
-# esbuild 构建脚本须运行（vitest/vite 依赖其原生二进制）
-onlyBuiltDependencies:
-  - esbuild
-  - '@google/genai'
-  - protobufjs
