@@ -34,6 +34,9 @@ pi install ./my-ab-client
 pi --extension ./extension/agent-board.ts
 ```
 
+**安装位置**：URL 安装落在 `~/.pi/agent/git/github.com/alem0n/my-agent-board`（路径按 URL
+推导，与分支/tag 无关）；本地路径安装不复制，settings 存源目录的相对引用。
+
 ## 配置
 
 配置文件 `~/.pi/agent/agent-board-server.json`（可选；缺失时输出错误日志并降级默认地址）：

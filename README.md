@@ -116,6 +116,10 @@ client 运行时闭包不含 server 代码，由 `tests/separation.spec.ts` 与 
 > tarball URL 实测均不被 pi 的安装解析器支持（报路径不存在或 clone 失败）。
 > 这也是为什么把 client 产物设为默认分支：一行安装即为精简安装。
 
+**安装位置**（实测）：URL 安装落在 `~/.pi/agent/git/github.com/alem0n/my-agent-board`
+（路径按 URL 推导，与分支/tag 无关，重装覆盖该目录）；本地路径安装不复制文件，
+settings.json 里存相对源目录的引用（移动/重命名源目录会导致引用失效，需重装）。
+
 **方式一：显式加载（开发推荐）**
 
 ```bash
