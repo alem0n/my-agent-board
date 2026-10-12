@@ -32,7 +32,8 @@ node scripts/split.mjs client --push origin         # 推送到远端（任意 g
 ```
 
 用户侧效果（均已实测）：client 分支克隆仅含 15 个 client 模块与 pi 清单，
-server 分支克隆仅含编译后的 server（`npm install --omit=dev && npm start` 即跑），
+server 分支克隆仅含编译后的 server（`npm install --omit=dev && npm start` 即跑；
+Web UI 加 `--web`：`npm start -- --web`，`--` 为 npm 参数透传分隔符不可省），
 互不含对方代码、不含源码与测试。
 
 分离契约由机器校验：`make layers` 的 client-server 双向规则、`tests/separation.spec.ts`
@@ -77,12 +78,23 @@ pnpm demo            # 或 make check 之后：bash scripts/demo.sh
 ```bash
 pnpm dev                      # 默认 127.0.0.1:7878，数据目录 ./data
 pnpm dev -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=debug
+pnpm dev -- --web             # 挂载内置 Web UI（GET / 与 /ui）
 ```
+
+参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。
+
+`--web` 为开关参数（裸 `--web` 或 `--web=true/false`），默认关闭。启用后同一端口挂载内置
+Web UI 于 `GET /` 与 `/ui`：agent 列表（uuid/name/cwd/lastSeen/状态数/上报数）+ 单 agent
+逐状态最新载荷 + 历史记录筛选，自动刷新 3s，零外部资源（离线可用）。默认关闭的设计意图：
+用户可选择自行可视化（直接消费 `/v1/*` JSON API），内置 UI 不是唯一入口。
+
+> npm 运行产物分支时参数必须用 `--` 透传：`npm start -- --web`（缺 `--` 会被 npm 吞掉）。
 
 端点（全部返回 `application/json`）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/` / `/ui` | 内置 Web UI（仅 `--web` 启用时；默认 404） |
 | GET | `/v1/health` | 健康检查（含协议版本、agent 数、运行时长） |
 | GET | `/v1/agents` | agent 列表摘要 |
 | GET | `/v1/agents/:uuid` | 单 agent 注册记录 + 逐状态最新载荷 |

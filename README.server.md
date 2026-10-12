@@ -7,10 +7,46 @@ pi agent 状态监控 server（自包含部署产物）。校验上报、分配 
 ```bash
 npm install --omit=dev    # 或 pnpm install --prod（仅 pino 一个依赖）
 npm start                 # node dist/src/index.js，默认 127.0.0.1:7878
+```
+
+参数示例（**注意 `--` 分隔符不可省**：npm 靠它把参数透传给启动脚本，缺了会被 npm 吞掉）：
+
+```bash
 npm start -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=info
 ```
 
-参数：`--port`、`--host`、`--data-dir`、`--log-level`。注册表持久化为数据目录下的 `agents.json`（原子写 + 去抖合并）。
+参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。注册表持久化为数据目录下的 `agents.json`（原子写 + 去抖合并）。
+
+## 内置 Web UI（可选）
+
+加 `--web` 挂载单页可视化界面（同端口的 `GET /` 与 `/ui`）：
+
+```bash
+npm start -- --web
+npm start -- --web --port=8099
+```
+
+功能：agent 列表（uuid / name / cwd / lastSeen / 状态数 / 上报数）、单 agent 逐状态最新载荷、历史记录筛选，每 3 秒自动刷新，零外部资源（离线可用）。
+
+**默认关闭**：想用自己的可视化（Grafana、自写面板等）时不加 `--web` 即可，直接消费 `/v1/*` JSON API。
+
+## 端口被占用
+
+`EADDRINUSE` 表示端口已被占用（通常是上一实例未退出）。换端口或先杀掉旧进程：
+
+```powershell
+# Windows（PowerShell）
+netstat -ano | findstr :7878        # 查到最后一列的 PID
+taskkill /PID <PID> /F
+```
+
+```bash
+# Linux / macOS
+lsof -i :7878                       # 或 ss -tlnp | grep 7878
+kill <PID>                          # 或 kill -9 <PID>
+```
+
+或直接换端口：`npm start -- --web --port=7879`。
 
 ## API
 
