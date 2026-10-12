@@ -1,0 +1,25 @@
+# 依赖与产物
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 环境变量与密钥（安全规范：禁止提交）
+.env
+.env.*
+!.env.example
+
+# 日志
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+
+# server/client 本地运行时数据（不入库）
+data/
+.demo-client/
+
+# 构建产物
+build/

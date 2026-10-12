@@ -1,0 +1,16 @@
+#!/bin/sh
+# 提交前质量门禁（快速子集。依赖审计在 CI 执行）。
+# 首次克隆后配置一次：git config core.hooksPath .githooks
+make precommit
+
+# 密钥扫描（可选）：安装 gitleaks 后自动启用
+# 安装：见 https://github.com/gitleaks/gitleaks 或包管理器
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact; then
+    echo "检测到疑似密钥泄露。请移除密钥或使用 .env（已纳入 .gitignore）。"
+    echo "误提交的密钥必须轮换。清理历史不能替代轮换。"
+    exit 1
+  fi
+else
+  echo "提示：未安装 gitleaks，跳过密钥扫描。安装方式见 AGENTS.md 第 8 节。"
+fi

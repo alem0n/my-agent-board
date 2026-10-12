@@ -1,0 +1,27 @@
+# 行尾归一化：仓库内统一 LF（不依赖个人的 core.autocrlf 配置）
+* text=auto
+
+# Windows 批处理脚本强制 CRLF（经文件共享跨平台执行时仍可用）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ics text eol=crlf
+
+# Shell 脚本强制 LF（经文件共享在 Unix 执行时仍可用）
+*.sh text eol=lf
+
+# 二进制文件：不做行尾转换与 diff/merge
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff2 binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+
+# 大文件改用 Git LFS 时，在此追加（须先安装 git-lfs）：
+# *.png filter=lfs diff=lfs merge=lfs -text

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Conventional Commits 校验：<type>(scope)?: <description>
+# 规范见 AGENTS.md「提交规范」。合入仓库与发布自动化的契约。
+commit_msg_file="$1"
+
+# 取第一条非注释、非空行
+first_line=$(grep -m1 -v '^#' "$commit_msg_file" | sed '/^$/d')
+
+# 豁免：合并提交与回滚提交
+case "$first_line" in
+  "Merge "*|"Revert "*) exit 0 ;;
+esac
+
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9_-]+\))?!?: .+'
+
+if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
+  echo "提交信息不符合 Conventional Commits 规范。"
+  echo "格式：<type>(scope)?: <description>"
+  echo "type ∈ feat | fix | docs | style | refactor | perf | test | build | ci | chore | revert"
+  echo "示例：feat(auth): add login"
+  echo "详见 AGENTS.md「提交规范」。"
+  exit 1
+fi

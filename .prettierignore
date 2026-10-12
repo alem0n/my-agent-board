@@ -1,0 +1,11 @@
+# 格式化检查豁免：锁文件不重排，文档为手写内容
+pnpm-lock.yaml
+*.md
+
+# 产物
+dist/
+coverage/
+
+# 脚本目录：hook 与 PATH 拦截器为 shell 脚本，不经 Prettier
+.githooks/
+interceptors/
