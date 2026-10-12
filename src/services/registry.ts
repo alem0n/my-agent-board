@@ -164,16 +164,38 @@ export class AgentRegistry {
   }
 
   list(): AgentSummary[] {
-    return [...this.agents.values()].map((record) => ({
-      uuid: record.uuid,
-      name: record.name,
-      cwd: record.cwd,
-      sessionId: record.sessionId,
-      firstSeen: record.firstSeen,
-      lastSeen: record.lastSeen,
-      reportCount: record.reportCount,
-      stateCount: Object.keys(record.latest).length,
-    }));
+    return [...this.agents.values()].map((record) => {
+      // 最后上报状态：history 按到达顺序追加，倒序找最近一条 report。
+      let lastState: string | null = null;
+      for (let i = record.history.length - 1; i >= 0; i -= 1) {
+        const entry = record.history[i];
+        if (entry !== undefined && entry.kind === 'report') {
+          lastState = entry.state ?? null;
+          break;
+        }
+      }
+      if (lastState === null) {
+        // 回退：latest 中时间戳最大者（history 滚动截断或仅含 identity_change 时）。
+        let lastStateTs = -1;
+        for (const [state, entry] of Object.entries(record.latest)) {
+          if (entry.timestamp > lastStateTs) {
+            lastStateTs = entry.timestamp;
+            lastState = state;
+          }
+        }
+      }
+      return {
+        uuid: record.uuid,
+        name: record.name,
+        cwd: record.cwd,
+        sessionId: record.sessionId,
+        firstSeen: record.firstSeen,
+        lastSeen: record.lastSeen,
+        reportCount: record.reportCount,
+        stateCount: Object.keys(record.latest).length,
+        lastState,
+      };
+    });
   }
 
   get(uuid: string): AgentRecord | undefined {

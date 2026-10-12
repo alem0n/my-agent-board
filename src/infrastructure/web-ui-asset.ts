@@ -27,11 +27,8 @@ const STYLES = `
   button:hover { border-color: #4a5a6a; }
   label { font-size: 13px; color: #9faab5; }
   main { display: grid; grid-template-columns: 1fr; gap: 20px; margin-top: 20px; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
-  .dot.active { background: #3fb950; }
-  .dot.idle { background: #d29922; }
-  .dot.offline { background: #6e7681; }
-  .status { font-size: 12px; color: #9faab5; white-space: nowrap; }
+  .state-label { font-size: 12px; white-space: nowrap; }
+  .state-label .raw { color: #6e7681; font-size: 11px; margin-left: 6px; }
   .panel {
     background: #151b22; border: 1px solid #242d36; border-radius: 10px;
     padding: 16px; min-height: 200px; overflow-x: auto;
@@ -64,6 +61,56 @@ const STYLES = `
 `;
 
 const SCRIPT = `
+  // 42 项监控状态的中文友好标签（与 STATE_REGISTRY 一一对应，未映射状态原样兜底）。
+  var STATE_LABELS = {
+    session_start: '会话启动',
+    session_shutdown: '会话关闭',
+    session_info_changed: '会话信息变更',
+    session_before_switch: '会话切换前',
+    session_before_fork: '会话分叉前',
+    session_before_compact: '会话压缩前',
+    session_compact: '会话已压缩',
+    session_compact_failed: '会话压缩失败',
+    session_before_tree: '会话树构建前',
+    session_tree: '会话树',
+    project_trust: '项目信任决策',
+    resources_discover: '资源发现',
+    mcp_servers_change: 'MCP 服务器变更',
+    cache_warming_decision: '缓存预热决策',
+    before_provider_headers: '供应商请求头前',
+    before_provider_request: '供应商请求前',
+    provider_stream_event: '供应商流式事件',
+    after_provider_response: '供应商响应后',
+    before_agent_start: 'Agent 启动前',
+    agent_start: 'Agent 启动',
+    agent_end: 'Agent 结束',
+    agent_before_settle: 'Agent 收尾前',
+    agent_settled: 'Agent 已收尾',
+    ui_prompt_start: '输入提示开始',
+    ui_prompt_end: '输入提示结束',
+    turn_start: '对话轮开始',
+    turn_end: '对话轮结束',
+    message_start: '消息开始',
+    message_end: '消息结束',
+    message_update: '消息更新',
+    tool_execution_start: '工具执行开始',
+    tool_execution_end: '工具执行结束',
+    tool_execution_update: '工具执行更新',
+    tool_call: '工具调用',
+    tool_result: '工具结果',
+    model_select: '模型选择',
+    thinking_level_select: '思考级别选择',
+    user_bash: '用户命令执行',
+    input: '用户输入',
+    context: '上下文变更',
+    context_with_system: '含系统上下文',
+    agent_snapshot: '环境快照'
+  };
+
+  function stateLabel(state) {
+    return STATE_LABELS[state] || state || '-';
+  }
+
   var selectedUuid = null;
   var autoRefresh = true;
   var timer = null;
@@ -86,18 +133,6 @@ const SCRIPT = `
     return Math.floor(delta / 86400000) + 'd ago';
   }
 
-  function agentStatus(lastSeen) {
-    if (lastSeen === undefined || lastSeen === null) {
-      return { level: 'offline', label: '未知' };
-    }
-    var delta = Date.now() - lastSeen;
-    if (delta < 0) { delta = 0; }
-    // client 默认快照周期 30s + flush 2s；60s 内有上报视为活跃。
-    if (delta < 60000) { return { level: 'active', label: '活跃' }; }
-    if (delta < 300000) { return { level: 'idle', label: '空闲' }; }
-    return { level: 'offline', label: '离线' };
-  }
-
   function esc(value) {
     return String(value === undefined || value === null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -107,9 +142,10 @@ const SCRIPT = `
   function renderAgents(agents) {
     var rows = agents.map(function (a) {
       var cls = 'clickable' + (a.uuid === selectedUuid ? ' selected' : '');
-      var status = agentStatus(a.lastSeen);
       return '<tr class="' + cls + '" data-uuid="' + esc(a.uuid) + '">'
-        + '<td><span class="status"><span class="dot ' + status.level + '"></span>' + status.label + '</span></td>'
+        + '<td><span class="state-label" title="' + esc(a.lastState) + '">'
+        + esc(stateLabel(a.lastState)) + '<span class="raw">' + esc(a.lastState || '') + '</span>'
+        + '</span></td>'
         + '<td>' + esc(a.name) + '</td>'
         + '<td title="' + esc(a.cwd) + '">' + esc(a.cwd) + '</td>'
         + '<td>' + relativeTime(a.lastSeen) + '</td>'
@@ -144,19 +180,21 @@ const SCRIPT = `
         var states = Object.keys(latestMap)
           .map(function (key) { return { state: key, timestamp: latestMap[key].timestamp, payload: latestMap[key].payload }; })
           .sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
-        var limit = document.getElementById('historyLimit').value || 20;
-        var stateFilter = document.getElementById('stateFilter').value;
+        var limitEl = document.getElementById('historyLimit');
+        var limit = limitEl ? (limitEl.value || 20) : 20;
+        var filterEl = document.getElementById('stateFilter');
+        var stateFilter = filterEl ? filterEl.value : '';
         var historyPath = '/v1/agents/' + encodeURIComponent(selectedUuid)
           + '/history?limit=' + limit + (stateFilter ? '&state=' + encodeURIComponent(stateFilter) : '');
+        // 选项带 selected 属性：自动刷新重建面板时筛选状态不丢失。
         var stateOptions = states.map(function (s) {
-          return '<option value="' + esc(s.state) + '">' + esc(s.state) + '</option>';
+          var selected = s.state === stateFilter ? ' selected' : '';
+          return '<option value="' + esc(s.state) + '"' + selected + '>'
+            + esc(s.state) + '（' + esc(stateLabel(s.state)) + '）</option>';
         }).join('');
-        document.getElementById('stateFilter').innerHTML =
-          '<option value="">全部状态</option>' + stateOptions;
-        if (stateFilter) { document.getElementById('stateFilter').value = stateFilter; }
 
         var latestHtml = states.map(function (s) {
-          return '<tr><td class="state-cell">' + esc(s.state) + '</td>'
+          return '<tr><td class="state-cell">' + esc(stateLabel(s.state)) + '<span class="raw">' + esc(s.state) + '</span></td>'
             + '<td>' + relativeTime(s.timestamp) + '</td>'
             + '<td><pre>' + esc(JSON.stringify(s.payload, null, 1)) + '</pre></td></tr>';
         }).join('') || '<tr><td colspan="3"><p class="empty">无状态</p></td></tr>';
@@ -164,7 +202,7 @@ const SCRIPT = `
         return fetchJson(historyPath).then(function (history) {
           var entries = history.entries || [];
           var historyHtml = entries.map(function (e) {
-            return '<tr><td class="state-cell">' + esc(e.state) + '</td>'
+            return '<tr><td class="state-cell">' + esc(stateLabel(e.state)) + '<span class="raw">' + esc(e.state) + '</span></td>'
               + '<td>' + relativeTime(e.timestamp) + '</td>'
               + '<td><pre>' + esc(JSON.stringify(e.payload).slice(0, 200)) + '</pre></td></tr>';
           }).join('') || '<tr><td colspan="3"><p class="empty">无历史</p></td></tr>';

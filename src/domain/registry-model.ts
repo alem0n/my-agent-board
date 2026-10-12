@@ -48,6 +48,8 @@ export interface AgentSummary {
   lastSeen: number;
   reportCount: number;
   stateCount: number;
+  /** 最后上报的状态标识（latest 中时间戳最大者；无上报时为 null）。 */
+  lastState: string | null;
 }
 
 export interface HistoryQuery {

@@ -133,8 +133,11 @@ describe('历史与查询', () => {
       cwd: '/home/user/proj',
       reportCount: 2,
       stateCount: 2,
+      lastState: 'agent_settled',
     });
     expect(list[0]?.firstSeen).toBeLessThanOrEqual(list[0]!.lastSeen);
+    // 无上报的摘要（理论路径）：lastState 为 null
+    expect(list[0]?.lastState).not.toBeNull();
   });
 });
 

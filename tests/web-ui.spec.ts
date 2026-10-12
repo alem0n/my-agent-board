@@ -106,8 +106,15 @@ describe('Web UI 挂载契约', () => {
     const head = /<thead><tr>(.*?)<\/tr><\/thead>/.exec(WEB_UI_HTML)?.[1] ?? '';
     expect(head.startsWith('<th>状态</th>')).toBe(true);
     expect(head.endsWith('<th>uuid</th>')).toBe(true);
-    // 行渲染：状态指示灯在前、uuid 单元格在末尾
-    expect(WEB_UI_HTML).toContain('agentStatus(a.lastSeen)');
+    // 状态列渲染最后上报事件的中文标签
+    expect(WEB_UI_HTML).toContain('stateLabel(a.lastState)');
+    // 中文标签表覆盖 42 项状态（抽样校验中英文映射存在）
+    expect(WEB_UI_HTML).toContain("agent_snapshot: '环境快照'");
+    expect(WEB_UI_HTML).toContain("tool_call: '工具调用'");
+    expect(WEB_UI_HTML).toContain("session_start: '会话启动'");
+    // 点击详情的 null 崩溃修复：historyLimit/stateFilter 读前有存在性检查
+    expect(WEB_UI_HTML).toContain("var limitEl = document.getElementById('historyLimit');");
+    expect(WEB_UI_HTML).toContain("var filterEl = document.getElementById('stateFilter');");
     expect(WEB_UI_HTML).toContain("' + esc(a.uuid) + '</span></td>'");
   });
 
