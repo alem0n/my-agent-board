@@ -26,8 +26,12 @@ const STYLES = `
   }
   button:hover { border-color: #4a5a6a; }
   label { font-size: 13px; color: #9faab5; }
-  main { display: grid; grid-template-columns: minmax(340px, 1fr) 2fr; gap: 20px; margin-top: 20px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  main { display: grid; grid-template-columns: 1fr; gap: 20px; margin-top: 20px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+  .dot.active { background: #3fb950; }
+  .dot.idle { background: #d29922; }
+  .dot.offline { background: #6e7681; }
+  .status { font-size: 12px; color: #9faab5; white-space: nowrap; }
   .panel {
     background: #151b22; border: 1px solid #242d36; border-radius: 10px;
     padding: 16px; min-height: 200px; overflow-x: auto;
@@ -82,6 +86,18 @@ const SCRIPT = `
     return Math.floor(delta / 86400000) + 'd ago';
   }
 
+  function agentStatus(lastSeen) {
+    if (lastSeen === undefined || lastSeen === null) {
+      return { level: 'offline', label: '未知' };
+    }
+    var delta = Date.now() - lastSeen;
+    if (delta < 0) { delta = 0; }
+    // client 默认快照周期 30s + flush 2s；60s 内有上报视为活跃。
+    if (delta < 60000) { return { level: 'active', label: '活跃' }; }
+    if (delta < 300000) { return { level: 'idle', label: '空闲' }; }
+    return { level: 'offline', label: '离线' };
+  }
+
   function esc(value) {
     return String(value === undefined || value === null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -91,17 +107,19 @@ const SCRIPT = `
   function renderAgents(agents) {
     var rows = agents.map(function (a) {
       var cls = 'clickable' + (a.uuid === selectedUuid ? ' selected' : '');
+      var status = agentStatus(a.lastSeen);
       return '<tr class="' + cls + '" data-uuid="' + esc(a.uuid) + '">'
-        + '<td><span class="uuid">' + esc(a.uuid.slice(0, 8)) + '</span></td>'
+        + '<td><span class="status"><span class="dot ' + status.level + '"></span>' + status.label + '</span></td>'
         + '<td>' + esc(a.name) + '</td>'
         + '<td title="' + esc(a.cwd) + '">' + esc(a.cwd) + '</td>'
         + '<td>' + relativeTime(a.lastSeen) + '</td>'
         + '<td class="num"><span class="badge">' + a.stateCount + ' states</span></td>'
         + '<td class="num">' + a.reportCount + '</td>'
+        + '<td><span class="uuid">' + esc(a.uuid) + '</span></td>'
         + '</tr>';
     }).join('');
     document.getElementById('agentRows').innerHTML = rows
-      || '<tr><td colspan="6" class="empty">暂无 agent 上报</td></tr>';
+      || '<tr><td colspan="7" class="empty">暂无 agent 上报</td></tr>';
     var nodes = document.querySelectorAll('#agentRows tr.clickable');
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].addEventListener('click', function (event) {
@@ -224,7 +242,7 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   <section class="panel">
     <h2>Agents</h2>
     <table>
-      <thead><tr><th>uuid</th><th>name</th><th>cwd</th><th>lastSeen</th><th>states</th><th class="num">reports</th></tr></thead>
+      <thead><tr><th>状态</th><th>name</th><th>cwd</th><th>lastSeen</th><th>states</th><th class="num">reports</th><th>uuid</th></tr></thead>
       <tbody id="agentRows"></tbody>
     </table>
   </section>

@@ -100,6 +100,17 @@ describe('Web UI 挂载契约', () => {
     }
   });
 
+  it('agents 表列为「状态优先、uuid 最后」的上下布局（防回潮）', () => {
+    expect(WEB_UI_HTML).toContain('grid-template-columns: 1fr;');
+    expect(WEB_UI_HTML).not.toContain('grid-template-columns: minmax');
+    const head = /<thead><tr>(.*?)<\/tr><\/thead>/.exec(WEB_UI_HTML)?.[1] ?? '';
+    expect(head.startsWith('<th>状态</th>')).toBe(true);
+    expect(head.endsWith('<th>uuid</th>')).toBe(true);
+    // 行渲染：状态指示灯在前、uuid 单元格在末尾
+    expect(WEB_UI_HTML).toContain('agentStatus(a.lastSeen)');
+    expect(WEB_UI_HTML).toContain("' + esc(a.uuid) + '</span></td>'");
+  });
+
   it('UI 页面引用的 API 端点均存在（无悬空 fetch）', async () => {
     const paths = ['/v1/health', '/v1/agents'];
     expect(WEB_UI_HTML).toMatch(/\/v1\/agents/);
