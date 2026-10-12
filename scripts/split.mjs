@@ -10,6 +10,10 @@
  *   node scripts/split.mjs client           # 重建 client 分支
  *   node scripts/split.mjs server           # 重建 server 分支
  *   node scripts/split.mjs client --push origin
+ *   node scripts/split.mjs client --push origin --tag v0.1.0   # 打发布 tag（锁版本用）
+ *
+ * client 分支作为仓库默认分支时，--tag 产出可锁定的版本引用：
+ *   git clone --depth 1 --branch v0.1.0 <url>
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -44,6 +48,12 @@ function main() {
   const kind = process.argv[2];
   const pushIndex = process.argv.indexOf('--push');
   const remote = pushIndex >= 0 ? process.argv[pushIndex + 1] : undefined;
+  const tagIndex = process.argv.indexOf('--tag');
+  const tag = tagIndex >= 0 ? process.argv[tagIndex + 1] : undefined;
+  if (tag !== undefined && !/^v\d+\.\d+\.\d+$/.test(tag)) {
+    console.error(`invalid tag (expect vX.Y.Z): ${tag}`);
+    process.exit(1);
+  }
   const spec = KINDS[kind];
   if (spec === undefined) {
     console.error(`usage: node scripts/split.mjs <client|server> [--push remote]`);
@@ -116,6 +126,15 @@ function main() {
   if (remote !== undefined) {
     git(['push', '--force', remote, `${spec.branch}:refs/heads/${spec.branch}`]);
     console.log(`pushed ${spec.branch} -> ${remote}`);
+  }
+  if (tag !== undefined) {
+    // 强制覆盖同名 tag：发布产物可重建（同 split 分支的 force 语义）
+    git(['tag', '-f', tag, spec.branch]);
+    console.log(`tagged ${spec.branch} as ${tag}`);
+    if (remote !== undefined) {
+      git(['push', '--force', remote, `refs/tags/${tag}`]);
+      console.log(`pushed tag ${tag} -> ${remote}`);
+    }
   }
 }
 

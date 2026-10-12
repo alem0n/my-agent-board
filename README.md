@@ -94,26 +94,27 @@ curl "http://127.0.0.1:7878/v1/agents/<uuid>/history?state=agent_snapshot&limit=
 
 前置条件：server 在可达地址运行。
 
-**按需获取**——三条路径（均已实测）：
+**按需获取**——仓库默认分支即 client 产物分支（安装最省事），开发在 main：
 
 ```bash
-# 方式一：官方 URL 一行安装（克隆默认分支 main，根 package.json 自带 pi 清单）
+# 方式一：官方 URL 一行安装（克隆默认分支 = client 产物，零 server 代码）
 pi install https://github.com/alem0n/my-agent-board
 
-# 方式二：精简克隆，不含任何 server 代码（client 分支为 orphan 产物分支）
-git clone --depth 1 --branch client https://github.com/alem0n/my-agent-board my-ab-client
+# 方式二：锁定版本（发布 tag；pi URL 安装不支持 #tag，用两步）
+git clone --depth 1 --branch v0.1.0 https://github.com/alem0n/my-agent-board my-ab-client
 pi install ./my-ab-client
 
-# 方式三：源码开发
-git clone --branch main https://github.com/alem0n/my-agent-board
+# 方式三：开发（main 为源码分支）
+git clone -b main https://github.com/alem0n/my-agent-board
 ```
 
-取舍：方式一最省事，但磁盘上会带 server 源码（client 运行时闭包不含它们，由
-`tests/separation.spec.ts` 保证）；方式二只拉 15 个 client 模块，适合严格精简的环境。
+仓库分支布局：`client`（默认，orphan 产物，15 模块零依赖）/ `server`（orphan 产物，
+编译 JS + pino 声明，`git clone --branch server`）/ `main`（开发全量：源码 + 测试 + 文档）。
+client 运行时闭包不含 server 代码，由 `tests/separation.spec.ts` 与 depcruiser 双向规则保证。
 
 > pi 的 URL 安装只支持**默认分支**——`github:user/repo#branch`、`git+https://…#branch`、
 > tarball URL 实测均不被 pi 的安装解析器支持（报路径不存在或 clone 失败）。
-> 锁定特定 client 版本用方式二克隆指定分支。
+> 这也是为什么把 client 产物设为默认分支：一行安装即为精简安装。
 
 **方式一：显式加载（开发推荐）**
 

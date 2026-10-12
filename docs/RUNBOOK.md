@@ -31,18 +31,20 @@ pnpm split:server                                   # 重建 server 分支（本
 node scripts/split.mjs client --push origin         # 推送到远端（任意 git host 均可）
 ```
 
+仓库默认分支为 `client`（orphan 产物分支；GitHub 设置），因此官方 URL 安装即精简安装。
 用户侧效果（均已实测）：
 
-- 官方 URL 安装：`pi install https://github.com/alem0n/my-agent-board`（克隆默认分支 main，
-  client 清单在根 package.json；运行时闭包不含 server 代码）
+- 官方 URL 安装：`pi install https://github.com/alem0n/my-agent-board`（克隆默认分支 =
+  client 产物，15 模块零依赖，零 server 代码）
 - client 分支克隆仅含 15 个 client 模块与 pi 清单，server 分支克隆仅含编译后的 server
   （`npm install --omit=dev && npm start` 即跑；Web UI 加 `--web`：
   `npm start -- --web`，`--` 为 npm 参数透传分隔符不可省）
 - 互不含对方代码、不含源码与测试
 
 > pi 的 URL 安装只支持默认分支：`github:user/repo#branch`、`git+https://…#branch`、
-> tarball URL 实测均不支持（解析器按本地路径或 git clone 处理）。分支级精简安装走
-> `git clone --branch client` + `pi install ./` 两步。
+> tarball URL 实测均不支持（解析器按本地路径或 git clone 处理）——所以默认分支设为
+> client 产物，让一行安装等价于精简安装。版本锁定走发布 tag：
+> `git clone --depth 1 --branch v0.1.0 <url>`。
 
 分离契约由机器校验：`make layers` 的 client-server 双向规则、`tests/separation.spec.ts`
 （双方闭包/产物自包含/零第三方运行时导入）、`tests/async-io.spec.ts`（client 无同步 IO）。

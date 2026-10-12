@@ -66,11 +66,10 @@ curl http://127.0.0.1:7878/v1/agents
 
 ## client 安装
 
-client 是独立的 pi 扩展，与 server 分离部署。从仓库的 `client` 分支获取：
+client 是独立的 pi 扩展，与 server 分离部署。仓库默认分支即 client 产物：
 
 ```bash
-git clone --depth 1 --branch client <repo-url> my-ab-client
-pi install ./my-ab-client
+pi install https://github.com/alem0n/my-agent-board    # 官方一行安装（克隆默认分支）
 ```
 
 完整设计见主仓库 `docs/DESIGN.md`。

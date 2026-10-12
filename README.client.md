@@ -1,20 +1,31 @@
 # my-agent-board client
 
-pi agent 状态监控 client（自包含部署产物）。订阅 pi 扩展的 41 个事件并周期采样环境快照，共 42 项状态，HTTP+JSON 上报到独立部署的 server。
+> 📦 **本分支（仓库默认分支）是 client 安装产物**：15 个模块、零运行时依赖。
+> 源码、测试与完整文档在 `main` 分支：`git clone -b main https://github.com/alem0n/my-agent-board`
+
+pi agent 状态监控 client。订阅 pi 扩展的 41 个事件并周期采样环境快照，共 42 项状态，HTTP+JSON 上报到独立部署的 server（server 分支单独部署）。
 
 ## 安装
 
-从 GitHub 仓库安装（官方方式，克隆默认分支 main，client 清单在根 package.json）：
+官方一行安装（克隆本默认分支，即此产物）：
 
 ```bash
 pi install https://github.com/alem0n/my-agent-board
 pi list                # 查看已配置包
 ```
 
-或使用本产物目录（此 README 所在分支即精简的 client 产物，无 server 代码）：
+锁定版本（发布 tag；pi 的 URL 安装不支持 `#tag` 引用，用两步）：
 
 ```bash
-pi install ./
+git clone --depth 1 --branch v0.1.0 https://github.com/alem0n/my-agent-board my-ab-client
+pi install ./my-ab-client
+```
+
+或克隆本分支后本地安装：
+
+```bash
+git clone --depth 1 https://github.com/alem0n/my-agent-board my-ab-client
+pi install ./my-ab-client
 ```
 
 或显式加载：
