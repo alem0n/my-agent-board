@@ -71,7 +71,7 @@ export async function loadClientConfig(options: {
       error: String(error),
       action: 'falling back to built-in defaults',
     });
-    const config = parseClientConfig(undefined);
+    const config = parseClientConfig(undefined, 'config JSON is invalid; using built-in defaults');
     logConfigIssues(config, logger, 'invalid-json');
     return config;
   }

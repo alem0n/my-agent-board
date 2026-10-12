@@ -158,14 +158,17 @@ function parseNamedNumber(
  * - url 缺失但 host 与 port 合法 → 组合为 http://host:port。
  * - 其余 → 默认地址 + issue。
  */
-export function parseClientConfig(raw: unknown): ClientConfig {
+export function parseClientConfig(
+  raw: unknown,
+  emptyReason = 'config is empty; using built-in defaults',
+): ClientConfig {
   const issues: ConfigIssue[] = [];
   const fallback = DEFAULT_CLIENT_CONFIG;
 
   if (raw === undefined || raw === null) {
     return {
       ...fallback,
-      issues: [{ field: 'config', message: 'config is empty; using built-in defaults' }],
+      issues: [{ field: 'config', message: emptyReason }],
     };
   }
   if (typeof raw !== 'object' || Array.isArray(raw)) {
