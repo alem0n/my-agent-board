@@ -10,15 +10,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import {
+  collectClosure,
   collectClientClosure,
   extractRelativeImports,
   resolveImport,
   SERVER_MODULES,
 } from '../scripts/pack-client.mjs';
+import { CLIENT_MODULES } from '../scripts/pack-server.mjs';
 
 const __dirname_test = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname_test, '..');
 const ENTRY = path.join(ROOT, 'extension', 'agent-board.ts');
+const SERVER_ENTRY = path.join(ROOT, 'src', 'index.ts');
 
 function externalImport(specifier: string): boolean {
   return !specifier.startsWith('.') && !specifier.startsWith('node:');
@@ -63,6 +66,17 @@ describe('client-server 分离（部署契约）', () => {
         expect(externalImport(specifier), `${file} imports third-party ${specifier}`).toBe(false);
       }
     }
+  });
+});
+
+describe('server 闭包（部署契约）', () => {
+  it('server 源码闭包不含任何 client 模块', () => {
+    const { files, unresolved } = collectClosure(SERVER_ENTRY);
+    expect(unresolved).toEqual([]);
+    const relative = files.map((file) => path.relative(ROOT, file).replaceAll(path.sep, '/'));
+    const leaks = relative.filter((file) => CLIENT_MODULES.includes(file));
+    expect(leaks).toEqual([]);
+    expect(relative).toContain('src/index.ts');
   });
 });
 

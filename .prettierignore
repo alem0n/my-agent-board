@@ -9,3 +9,4 @@ coverage/
 # 脚本目录：hook 与 PATH 拦截器为 shell 脚本，不经 Prettier
 .githooks/
 interceptors/
+build/

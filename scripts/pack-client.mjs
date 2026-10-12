@@ -64,8 +64,8 @@ export function resolveImport(fromFile, specifier) {
   return null;
 }
 
-/** 计算从入口出发的完整模块闭包。 */
-export function collectClientClosure(entry = ENTRY) {
+/** 计算从任意入口出发的完整模块闭包。 */
+export function collectClosure(entry) {
   const visited = new Set();
   const unresolved = [];
   const stack = [entry];
@@ -87,6 +87,11 @@ export function collectClientClosure(entry = ENTRY) {
     }
   }
   return { files: [...visited].sort(), unresolved };
+}
+
+/** client 入口闭包（默认扩展入口）。 */
+export function collectClientClosure(entry = ENTRY) {
+  return collectClosure(entry);
 }
 
 /** 产物 package.json（pi 清单 + 宿主 peer 依赖，无运行时依赖）。 */
@@ -141,9 +146,20 @@ function main() {
     `${JSON.stringify(artifactPackageJson(), null, 2)}\n`,
   );
 
+  copyAsset(outDir, 'README.client.md', 'README.md');
+  copyAsset(outDir, 'LICENSE');
+
   console.log(`client artifact: ${outDir}`);
   console.log(`modules: ${files.length} (entry: extension/agent-board.ts)`);
   console.log('runtime deps: none (node builtins only)');
+}
+
+/** 复制仓库内文件到产物（存在时）。 */
+function copyAsset(outDir, source, target = source) {
+  const sourcePath = path.join(ROOT, source);
+  if (fs.existsSync(sourcePath)) {
+    fs.copyFileSync(sourcePath, path.join(outDir, target));
+  }
 }
 
 const isMain = process.argv[1] === __filename;

@@ -23,8 +23,20 @@ pnpm pack:client     # 生成 build/client/（入口 extension/agent-board.ts + 
 pi install ./build/client   # 作为独立 pi 包安装（含 pi 清单与宿主 peer 依赖声明）
 ```
 
+分发分支（orphan，同 gh-pages 模式，无主仓历史，force 更新）：
+
+```bash
+pnpm split:client                                   # 重建 client 分支（本地）
+pnpm split:server                                   # 重建 server 分支（本地）
+node scripts/split.mjs client --push origin         # 推送到远端（任意 git host 均可）
+```
+
+用户侧效果（均已实测）：client 分支克隆仅含 15 个 client 模块与 pi 清单，
+server 分支克隆仅含编译后的 server（`npm install --omit=dev && npm start` 即跑），
+互不含对方代码、不含源码与测试。
+
 分离契约由机器校验：`make layers` 的 client-server 双向规则、`tests/separation.spec.ts`
-（闭包/产物自包含/零第三方运行时导入）、`tests/async-io.spec.ts`（client 无同步 IO）。
+（双方闭包/产物自包含/零第三方运行时导入）、`tests/async-io.spec.ts`（client 无同步 IO）。
 详见 DESIGN.md §1.5。
 
 ---

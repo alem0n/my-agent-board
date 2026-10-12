@@ -107,6 +107,12 @@ pi 进程                                          board server 进程
 `AGENT_BOARD_SERVER_CONFIG`（覆盖配置路径）是唯一的部署期参数；协议版本与契约版本负责
 两侧独立演进的兼容性裁决（§4.2、§3.3）。
 
+**git 分发设计**：单开发仓 + 双 orphan 分支（`client` / `server`），由
+`scripts/split.mjs` 从产物 force 重建，同 gh-pages 模式。用户
+`git clone --depth 1 --branch <client|server>` 只拿部署产物（无主仓历史、无对方代码、
+无源码与测试）；开发者克隆 `main` 拿全量。不拆三个仓库的原因：42 项状态契约是两侧共享
+合同，需同仓原子变更与同步测试；跨仓协议对齐成本高于本规模收益。
+
 ---
 
 ## 2. 状态清单

@@ -91,6 +91,16 @@ curl "http://127.0.0.1:7878/v1/agents/<uuid>/history?state=agent_snapshot&limit=
 
 前置条件：server 在可达地址运行。
 
+**按需获取（不含对方代码）**——仓库以单开发仓 + 双分发分支（orphan）组织：
+
+```bash
+git clone --depth 1 --branch client <repo-url>   # 仅 client 产物（15 模块 + pi 清单，零依赖）
+git clone --depth 1 --branch server <repo-url>   # 仅 server 产物（编译 JS + pino 依赖声明）
+git clone --branch main <repo-url>               # 开发全量（源码 + 测试 + 文档）
+```
+
+分发分支由发布脚本生成（`pnpm split:client` / `pnpm split:server`，force 更新），无主仓历史。详见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1.5。
+
 **方式一：显式加载（开发推荐）**
 
 ```bash

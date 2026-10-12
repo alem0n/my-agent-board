@@ -9,6 +9,7 @@
 - pi agent 状态监控系统：client 为 pi 扩展（`extension/agent-board.ts`），采集全部 42 项受支持状态（41 个扩展事件 + 周期 agent_snapshot）按契约上报；server 聚合存储并提供查询 API。
 - client/server 分离部署：`pnpm pack:client` 生成自包含 client 产物（build/client，零运行时依赖、pi 清单）；模块闭包经 dependency-cruiser 双向规则与 `tests/separation.spec.ts` 机器校验，协议（版本号+错误码+契约）为两侧唯一耦合。
 - 移除离线 outbox 持久化：上报缓冲改为纯内存，重试耗尽/缓冲超限/关闭残留一律丢弃并计数。监控状态持续刷新，旧状态价值快速衰减，离线持久化无收益（JSONL-CHANGE）。
+- git 分发设计：单开发仓 + 双 orphan 分支（client/server），由 `pnpm split:client` / `pnpm split:server` 从产物 force 重建（gh-pages 模式）。用户按需克隆单个分支，互不含对方代码；server 产物新增 `pnpm pack:server`（编译闭包 + pino 依赖声明）。
 - client 侧全异步 IO（日志/身份/outbox/配置均经 `fs/promises` + 串行写队列），不阻塞 pi 主线程；静态守护测试 `tests/async-io.spec.ts` 防止同步调用回潮。
 - 状态注册表与逐状态契约（`src/domain/contracts.ts`），信封协议版本 `1`，加法式契约演进。
 - agent 身份方案：name 缺失回退 session id；server 权威分配 uuid；身份文件持久化与降级。
