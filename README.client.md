@@ -4,9 +4,17 @@ pi agent 状态监控 client（自包含部署产物）。订阅 pi 扩展的 41
 
 ## 安装
 
+从 GitHub 仓库安装（官方方式，克隆默认分支 main，client 清单在根 package.json）：
+
 ```bash
-pi install ./          # 作为 pi 包安装（含 pi 清单）
+pi install https://github.com/alem0n/my-agent-board
 pi list                # 查看已配置包
+```
+
+或使用本产物目录（此 README 所在分支即精简的 client 产物，无 server 代码）：
+
+```bash
+pi install ./
 ```
 
 或显式加载：

@@ -94,15 +94,26 @@ curl "http://127.0.0.1:7878/v1/agents/<uuid>/history?state=agent_snapshot&limit=
 
 前置条件：server 在可达地址运行。
 
-**按需获取（不含对方代码）**——仓库以单开发仓 + 双分发分支（orphan）组织：
+**按需获取**——三条路径（均已实测）：
 
 ```bash
-git clone --depth 1 --branch client <repo-url>   # 仅 client 产物（15 模块 + pi 清单，零依赖）
-git clone --depth 1 --branch server <repo-url>   # 仅 server 产物（编译 JS + pino 依赖声明）
-git clone --branch main <repo-url>               # 开发全量（源码 + 测试 + 文档）
+# 方式一：官方 URL 一行安装（克隆默认分支 main，根 package.json 自带 pi 清单）
+pi install https://github.com/alem0n/my-agent-board
+
+# 方式二：精简克隆，不含任何 server 代码（client 分支为 orphan 产物分支）
+git clone --depth 1 --branch client https://github.com/alem0n/my-agent-board my-ab-client
+pi install ./my-ab-client
+
+# 方式三：源码开发
+git clone --branch main https://github.com/alem0n/my-agent-board
 ```
 
-分发分支由发布脚本生成（`pnpm split:client` / `pnpm split:server`，force 更新），无主仓历史。详见 [docs/RUNBOOK.md](docs/RUNBOOK.md) §1.5。
+取舍：方式一最省事，但磁盘上会带 server 源码（client 运行时闭包不含它们，由
+`tests/separation.spec.ts` 保证）；方式二只拉 15 个 client 模块，适合严格精简的环境。
+
+> pi 的 URL 安装只支持**默认分支**——`github:user/repo#branch`、`git+https://…#branch`、
+> tarball URL 实测均不被 pi 的安装解析器支持（报路径不存在或 clone 失败）。
+> 锁定特定 client 版本用方式二克隆指定分支。
 
 **方式一：显式加载（开发推荐）**
 
