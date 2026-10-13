@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
 ### Changed
 
 - **看板：拆分“等待输入”相位（A1，REQ-014）**：未闭合的 `ui_prompt` 按用户操作形态拆分——键入型（kind ∈ {input, editor, custom}，用户需键入内容）派生为独立相位 `awaiting-input`（Web UI 中文“等待输入”），选择/确认型（select/confirm）保留为 `waiting-human`；相位优先级：离线 > 等待输入 > 等待人工 > 工具执行 > 压缩 > 流式 > 活动 > 空闲。依据：pi 的 `ctx.ui.input/editor` 为文本输入、`select/confirm` 为按键选择、`custom` 为接管渲染与键鼠输入的重量级交互，操作负担不同，看板需区分“需要你打字”与“只需你点选”。注意队列与健康度不变（两相位共用 `waiting-human` 阻塞信号、健康度 watch）；kind 缺失/未知时保守归 `waiting-human`（与拆分前一致）。模拟器演示流补入 `input` 类型提示；派生层单测 +5。
