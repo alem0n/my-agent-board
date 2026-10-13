@@ -95,9 +95,10 @@ export function collectClientClosure(entry = ENTRY) {
 
 /** 产物 package.json（pi 清单 + 宿主 peer 依赖，无运行时依赖）。 */
 function artifactPackageJson() {
+  const root = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   return {
     name: 'my-agent-board-client',
-    version: '0.1.0',
+    version: root.version,
     description: 'pi agent 状态监控 client（自包含部署产物；server 单独部署）',
     type: 'module',
     keywords: ['pi-package'],
