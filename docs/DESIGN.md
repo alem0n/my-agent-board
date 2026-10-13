@@ -361,7 +361,7 @@ server 端查询 API 永远返回当前值 + 可查变化历史。
 | POST | `/v1/report` | 单信封 | `200 { ok:true, uuid, assigned:boolean }` |
 | POST | `/v1/report/batch` | `{ reports: Envelope[] }`（≤512 条，body ≤4MB） | `200 { ok:true, accepted:n, uuid, assigned, rejected:[{index,code,message,state?}] }`（原子批：非法信封所在批次整体拒绝并逐条返回；client 剔除被拒条目后重试剩余；无 uuid 批量的信封共用本批首个 uuid，assigned 为请求级） |
 | GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastHeartbeat,reportCount,stateCount,online,lastState}] }`（`online` 为派生态：`now - max(lastSeen,lastHeartbeat) ≤ 60s`，REQ-013） |
-| DELETE | `/v1/agents/:uuid` | — | `200 { uuid, deleted:true }`；不存在 → `404 E_NOT_FOUND`。治理操作：请求即授权，server 不做本地研判 |
+| DELETE | `/v1/agents/:uuid` | — | `200 { uuid, deleted:true }`；不存在 → `404 E_NOT_FOUND`。治理操作：请求即授权（Web UI 详情面板提供确认后删除） |
 | POST | `/v1/heartbeat` | `{ uuid }` | `200 { ok:true, uuid }`；记录不存在 → `404 E_NOT_FOUND`（心跳**不创建/不复活**记录）。进程级在线探测（REQ-013）：仅更新 `lastHeartbeat`，不写 latest、不计 reportCount、不入 history；GET该方法 → 405 |
 | GET | `/v1/agents/:uuid` | — | `200 { …注册表当前值…, latest: Record<StateId,{timestamp,payload}>, online }` |
 | GET | `/v1/agents/:uuid/history` | `?state=&limit=≤1000&since=epoch ms` | `200 { uuid, state?, entries:[HistoryEntry], truncated:boolean }` |

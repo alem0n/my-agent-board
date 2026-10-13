@@ -54,9 +54,7 @@ const STYLES = `
   .error { color: #e5707a; font-size: 13px; padding: 8px; }
   .empty { color: #7a8794; font-size: 13px; padding: 12px 0; }
   .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
-  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 2px; }
-  .dot-on { background: #2ea043; }
-  .dot-off { background: #6e7681; }
+  .online-mark { font-weight: bold; }
   select, input[type='number'] {
     background: #1f2730; color: #dbe2ea; border: 1px solid #303a45;
     border-radius: 6px; padding: 5px 8px; font-size: 13px;
@@ -146,8 +144,8 @@ const SCRIPT = `
     var rows = agents.map(function (a) {
       var cls = 'clickable' + (a.uuid === selectedUuid ? ' selected' : '');
       return '<tr class="' + cls + '" data-uuid="' + esc(a.uuid) + '">'
-        + '<td><span class="dot ' + (a.online ? 'dot-on' : 'dot-off') + '" title="'
-        + (a.online ? '在线' : '离线') + '"></span></td>'
+        + '<td class="online-mark" title="' + (a.online ? '在线' : '离线') + '">'
+        + (a.online ? '✓' : '✗') + '</td>'
         + '<td><span class="state-label" title="' + esc(a.lastState) + '">'
         + esc(stateLabel(a.lastState)) + '<span class="raw">' + esc(a.lastState || '') + '</span>'
         + '</span></td>'
@@ -205,6 +203,9 @@ const SCRIPT = `
         }).join('') || '<tr><td colspan="3"><p class="empty">无状态</p></td></tr>';
 
         return fetchJson(historyPath).then(function (history) {
+          // 竞态守卫：in-flight 的详情渲染可能晚于删除完成（selectedUuid 已清），
+          // 不让它用 404 覆盖「已删除」提示。
+          if (!selectedUuid) { return; }
           var entries = history.entries || [];
           var historyHtml = entries.map(function (e) {
             return '<tr><td class="state-cell">' + esc(stateLabel(e.state)) + '<span class="raw">' + esc(e.state) + '</span></td>'
@@ -213,13 +214,14 @@ const SCRIPT = `
           }).join('') || '<tr><td colspan="3"><p class="empty">无历史</p></td></tr>';
           document.getElementById('detail').innerHTML =
             '<h2>' + esc(agent.name) + ' <span class="uuid">' + esc(agent.uuid) + '</span></h2>'
-            + '<p class="meta"><span class="dot ' + (agent.online ? 'dot-on' : 'dot-off') + '"></span>'
+            + '<p class="meta"><span class="online-mark">' + (agent.online ? '✓' : '✗') + '</span>'
             + (agent.online ? '在线' : '离线')
             + ' · lastSeen ' + relativeTime(agent.lastSeen)
             + ' · lastHeartbeat ' + (agent.lastHeartbeat ? relativeTime(agent.lastHeartbeat) : '从未') + '</p>'
             + '<div class="toolbar">'
             + '<label>状态 <select id="stateFilter"><option value="">全部状态</option>' + stateOptions + '</select></label>'
             + '<label>条数 <input id="historyLimit" type="number" min="1" max="200" value="' + limit + '"></label>'
+            + '<button id="deleteBtn" type="button">删除该 agent</button>'
             + '</div>'
             + '<h2>最新状态</h2><table><thead><tr><th>state</th><th>时间</th><th>payload</th></tr></thead><tbody>' + latestHtml + '</tbody></table>'
             + '<h2 style="margin-top:20px">历史（最近 ' + entries.length + ' 条）</h2>'
@@ -232,11 +234,37 @@ const SCRIPT = `
       });
   }
 
+  function deleteSelectedAgent() {
+    if (!selectedUuid) { return; }
+    var uuid = selectedUuid;
+    // 治理操作（请求即授权）：给一次确认，并说明存活进程会重建记录（信任模型）
+    if (!window.confirm('删除该 agent？latest 与历史一并删除。'
+      + '若该进程仍在线，其下次上报或心跳会重建记录。')) { return; }
+    fetch('/v1/agents/' + encodeURIComponent(uuid), { method: 'DELETE' })
+      .then(function (res) {
+        if (res.status === 404) {
+          throw new Error('记录已不存在（可能已被其他途径删除）');
+        }
+        if (!res.ok) { throw new Error('HTTP ' + res.status); }
+        selectedUuid = null;
+        document.getElementById('detail').innerHTML =
+          '<p class="empty">已删除。选择一个 agent 查看逐状态最新载荷与历史</p>';
+        refresh();
+      })
+      .catch(function (error) {
+        document.getElementById('detail').innerHTML =
+          '<p class="error">删除失败: ' + esc(error.message) + '</p>';
+        refresh();
+      });
+  }
+
   function bindToolbar() {
     var filter = document.getElementById('stateFilter');
     var limit = document.getElementById('historyLimit');
+    var del = document.getElementById('deleteBtn');
     if (filter) { filter.addEventListener('change', renderAgentDetail); }
     if (limit) { limit.addEventListener('change', renderAgentDetail); }
+    if (del) { del.addEventListener('click', deleteSelectedAgent); }
   }
 
   function refresh() {

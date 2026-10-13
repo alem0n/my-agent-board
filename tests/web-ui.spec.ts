@@ -86,7 +86,7 @@ describe('Web UI 挂载契约', () => {
     }
   });
 
-  it('agents 表列为「在线圆点领头、状态次之、uuid 最后」的上下布局（防回潮）', () => {
+  it('agents 表列为「在线符号领头、状态次之、uuid 最后」的上下布局（防回潮）', () => {
     expect(WEB_UI_HTML).toContain('grid-template-columns: 1fr;');
     expect(WEB_UI_HTML).not.toContain('grid-template-columns: minmax');
     const head = /<thead><tr>(.*?)<\/tr><\/thead>/.exec(WEB_UI_HTML)?.[1] ?? '';
@@ -97,10 +97,10 @@ describe('Web UI 挂载契约', () => {
       ),
     ).toBe(true);
     expect(head.endsWith('<th>uuid</th>')).toBe(true);
-    // 在线圆点渲染（REQ-013）
-    expect(WEB_UI_HTML).toContain("a.online ? 'dot-on' : 'dot-off'");
-    // 圆点样式在 <style>（STYLES）内，不在 <script>（SCRIPT）内
-    expect(WEB_UI_HTML).toContain('.dot-on { background: #2ea043; }');
+    // 在线状态以文本符号 ✓/✗ 表示（不用颜色圆点）
+    expect(WEB_UI_HTML).toContain("(a.online ? '✓' : '✗')");
+    expect(WEB_UI_HTML).not.toContain('dot-on');
+    expect(WEB_UI_HTML).not.toContain('dot-off');
     // 状态列渲染最后上报事件的中文标签
     expect(WEB_UI_HTML).toContain('stateLabel(a.lastState)');
     // 中文标签表覆盖 42 项状态（抽样校验中英文映射存在）
@@ -117,6 +117,20 @@ describe('Web UI 挂载契约', () => {
     const scriptMatch = /<script>([\s\S]*)<\/script>/.exec(WEB_UI_HTML);
     expect(scriptMatch).not.toBeNull();
     expect(() => new Function(scriptMatch?.[1] ?? '')).not.toThrow();
+  });
+
+  it('详情面板提供删除功能（按钮 + DELETE 请求 + 确认 + 绑定）', () => {
+    expect(WEB_UI_HTML).toContain('<button id="deleteBtn" type="button">删除该 agent</button>');
+    expect(WEB_UI_HTML).toContain('function deleteSelectedAgent');
+    expect(WEB_UI_HTML).toContain("'/v1/agents/' + encodeURIComponent(uuid), { method: 'DELETE' }");
+    // 确认对话框 + 重建提示（信任模型：存活进程下次上报/心跳会重建记录）
+    expect(WEB_UI_HTML).toContain('window.confirm');
+    expect(WEB_UI_HTML).toContain('其下次上报或心跳会重建记录');
+    expect(WEB_UI_HTML).toContain("getElementById('deleteBtn')");
+    // 删除后清除选中并刷新
+    expect(WEB_UI_HTML).toContain('selectedUuid = null;');
+    // 详情渲染后重绑定工具条（含删除按钮）；漏绑则按钮无响应
+    expect(WEB_UI_HTML).toContain('bindToolbar();');
   });
 
   it('UI 页面引用的 API 端点均存在（无悬空 fetch）', async () => {

@@ -28,7 +28,7 @@ npm start -- --web
 npm start -- --web --port=8099
 ```
 
-功能：agent 列表（uuid / name / cwd / lastSeen / 状态数 / 上报数）、单 agent 逐状态最新载荷、历史记录筛选，每 3 秒自动刷新，零外部资源（离线可用）。
+功能：agent 列表（在线状态 `✓`/`✗` / 状态 / name / cwd / lastSeen / 状态数 / 上报数）、单 agent 逐状态最新载荷、历史记录筛选、**删除条目**（详情面板「删除该 agent」，确认后调 `DELETE /v1/agents/:uuid`，latest 与历史一并删除；存活进程下次上报/心跳会重建记录），每 3 秒自动刷新，零外部资源（离线可用）。
 
 **默认关闭**：想用自己的可视化（Grafana、自写面板等）时不加 `--web` 即可，直接消费 `/v1/*` JSON API。
 

@@ -6,6 +6,7 @@
 
 ### Added
 
+- **Web UI 治理与展示**：在线状态以 `✓`/`✗` 文本符号表示（不使用颜色圆点）；详情面板新增「删除该 agent」按钮——确认后调 `DELETE /v1/agents/:uuid`（latest 与历史一并删除；提示存活进程会重建记录），删除后清除选中并刷新。
 - **server 新增进程级在线检测（REQ-013）**：`POST /v1/heartbeat` 端点（`{uuid}` → 更新 `lastHeartbeat`，记录不存在返回 404、不创建/不复活记录）；client 扩展**加载时**启动心跳定时器（`heartbeatIntervalMs` 默认 20s，`0` = 关闭；与 session 生命周期解耦，覆盖无活跃会话的静默期；定时器 `unref()` 不阻止 pi 退出；失败不进重试队列）；`/v1/agents` 列表与 `GET /v1/agents/:uuid` 新增派生字段 `online`（`now - max(lastSeen, lastHeartbeat) ≤ 60s`）与 `lastHeartbeat`；Web UI 列表与详情显示在线状态圆点。
 - pi agent 状态监控系统：client 为 pi 扩展（`extension/agent-board.ts`），采集全部 42 项受支持状态（41 个扩展事件 + 周期 agent_snapshot）按契约上报；server 聚合存储并提供查询 API。
 - client/server 分离部署：`pnpm pack:client` 生成自包含 client 产物（build/client，零运行时依赖、pi 清单）；模块闭包经 dependency-cruiser 双向规则与 `tests/separation.spec.ts` 机器校验，协议（版本号+错误码+契约）为两侧唯一耦合。
