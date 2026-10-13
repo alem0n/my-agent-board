@@ -86,12 +86,21 @@ describe('Web UI 挂载契约', () => {
     }
   });
 
-  it('agents 表列为「状态优先、uuid 最后」的上下布局（防回潮）', () => {
+  it('agents 表列为「在线圆点领头、状态次之、uuid 最后」的上下布局（防回潮）', () => {
     expect(WEB_UI_HTML).toContain('grid-template-columns: 1fr;');
     expect(WEB_UI_HTML).not.toContain('grid-template-columns: minmax');
     const head = /<thead><tr>(.*?)<\/tr><\/thead>/.exec(WEB_UI_HTML)?.[1] ?? '';
-    expect(head.startsWith('<th>状态</th>')).toBe(true);
+    expect(head.startsWith('<th title="在线状态')).toBe(true);
+    expect(
+      head.startsWith(
+        '<th title="在线状态（REQ-013：近 60s 有上报或心跳）">在线</th><th>状态</th>',
+      ),
+    ).toBe(true);
     expect(head.endsWith('<th>uuid</th>')).toBe(true);
+    // 在线圆点渲染（REQ-013）
+    expect(WEB_UI_HTML).toContain("a.online ? 'dot-on' : 'dot-off'");
+    // 圆点样式在 <style>（STYLES）内，不在 <script>（SCRIPT）内
+    expect(WEB_UI_HTML).toContain('.dot-on { background: #2ea043; }');
     // 状态列渲染最后上报事件的中文标签
     expect(WEB_UI_HTML).toContain('stateLabel(a.lastState)');
     // 中文标签表覆盖 42 项状态（抽样校验中英文映射存在）
@@ -102,6 +111,12 @@ describe('Web UI 挂载契约', () => {
     expect(WEB_UI_HTML).toContain("var limitEl = document.getElementById('historyLimit');");
     expect(WEB_UI_HTML).toContain("var filterEl = document.getElementById('stateFilter');");
     expect(WEB_UI_HTML).toContain("' + esc(a.uuid) + '</span></td>'");
+  });
+
+  it('内联 <script> 语法可解析（CSS 误插进 SCRIPT 的 P0 回归防护）', () => {
+    const scriptMatch = /<script>([\s\S]*)<\/script>/.exec(WEB_UI_HTML);
+    expect(scriptMatch).not.toBeNull();
+    expect(() => new Function(scriptMatch?.[1] ?? '')).not.toThrow();
   });
 
   it('UI 页面引用的 API 端点均存在（无悬空 fetch）', async () => {

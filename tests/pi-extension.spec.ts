@@ -204,6 +204,94 @@ describe('pi 扩展胶水层', () => {
     await components.stop();
   });
 
+  it('心跳：身份未建立前跳过（不伪造身份），stats 全为 0', async () => {
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl }),
+    });
+    // 加载即发首跳（无持久身份、无会话），但不产生任何请求
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(components.heartbeatStats).toEqual({ sent: 0, failed: 0, missing: 0 });
+    expect(registry.list()).toHaveLength(0);
+    await components.stop();
+  }, 10_000);
+
+  it('心跳：身份建立后按周期发出（sent ≥ 1，lastHeartbeat 更新，online 为 true）', async () => {
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl, heartbeatIntervalMs: 1_000 }),
+    });
+    for (const handler of pi.emitted.get('session_start') ?? []) {
+      handler({ type: 'session_start', reason: 'startup' }, makeCtx());
+    }
+    await components.reporter.collectSnapshotAndFlush();
+    const uuid = components.reporter.currentIdentity?.uuid;
+    expect(uuid).toBeDefined();
+
+    // 首个周期（1s）后心跳送达；会话级 reporter 未持心跳，在线靠心跳维持
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(components.heartbeatStats.sent).toBeGreaterThanOrEqual(1);
+    expect(components.heartbeatStats.failed).toBe(0);
+    const record = registry.get(uuid!);
+    expect(record?.lastHeartbeat).toBeGreaterThan(0);
+    expect(registry.isOnline(uuid!)).toBe(true);
+    await components.stop();
+  }, 30_000);
+
+  it('心跳：记录被 DELETE 治理后 → missing（404，不复活记录）', async () => {
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl, heartbeatIntervalMs: 1_000 }),
+    });
+    for (const handler of pi.emitted.get('session_start') ?? []) {
+      handler({ type: 'session_start', reason: 'startup' }, makeCtx());
+    }
+    await components.reporter.collectSnapshotAndFlush();
+    const uuid = components.reporter.currentIdentity!.uuid;
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(components.heartbeatStats.sent).toBeGreaterThanOrEqual(1);
+
+    registry.delete(uuid);
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(components.heartbeatStats.missing).toBeGreaterThanOrEqual(1);
+    // 心跳不复活：注册表保持空
+    expect(registry.list()).toHaveLength(0);
+    await components.stop();
+  }, 30_000);
+
+  it('心跳：持久化身份存在时加载即探测（立即可见在线）', async () => {
+    // 先建一个带记录的身份（信任模型：携带该 uuid 建立记录）
+    const seeded = '44444444-4444-4444-4444-444444444444';
+    fs.writeFileSync(
+      path.join(dir, 'agent-board-identity.json'),
+      JSON.stringify({ uuid: seeded, assignedAt: 1791800000000 }),
+    );
+    registry.ingest(
+      {
+        protocolVersion: '1',
+        state: 'agent_start',
+        timestamp: 1791800000000,
+        agent: { name: 'seeded-agent', cwd: '/home/user/proj', uuid: seeded },
+        payload: {},
+      },
+      1791800000000,
+    );
+
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl, heartbeatIntervalMs: 60_000 }),
+    });
+    // 预载完成后立即探测一次（不必等周期）
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(components.heartbeatStats.sent).toBe(1);
+    expect(registry.isOnline(seeded)).toBe(true);
+    await components.stop();
+  }, 10_000);
+
   it('默认零日志：未配置 logLevel 时不创建日志文件（client 轻量契约）', async () => {
     const pi = makePi();
     const components = await createAgentBoard(pi, {

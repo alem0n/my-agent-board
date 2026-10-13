@@ -24,7 +24,7 @@ import type {
   PiEnvironmentSnapshot,
   PiStateSource,
 } from '../domain/pi-env.js';
-import type { Transport } from '../domain/ports.js';
+import type { Transport, HeartbeatStats } from '../domain/ports.js';
 import { loadClientConfig, envLogLevel, LOG_LEVEL_ENV } from './client-config-loader.js';
 import { FileIdentityStore, SerialFileWriter } from './file-store.js';
 import { HttpTransport } from './http-client.js';
@@ -105,6 +105,8 @@ export interface AgentBoardPaths {
 
 export interface AgentBoardComponents {
   reporter: Reporter;
+  /** 进程级心跳计数（REQ-013）：sent / failed / missing（404）。 */
+  heartbeatStats: HeartbeatStats;
   stop: () => Promise<void>;
 }
 
@@ -178,6 +180,50 @@ export async function createAgentBoard(
 
   const unsubscribeAll = bindAllEvents(pi, dispatch);
 
+  // 进程级心跳（REQ-013）：扩展加载即启动，与 session 生命周期解耦。
+  // 覆盖无活跃会话的静默期，使 server 能派生 online 状态。
+  const heartbeatStats: HeartbeatStats = { sent: 0, failed: 0, missing: 0 };
+  let heartbeatUuid: string | undefined;
+  const heartbeatTick = async (): Promise<void> => {
+    // uuid 信任来源与上报一致：携带自己的身份；尚未建立（无持久身份且从未上报）则跳过
+    const uuid = heartbeatUuid ?? reporter.currentIdentity?.uuid;
+    if (uuid === undefined) {
+      return;
+    }
+    try {
+      const result = await transport.postHeartbeat(uuid);
+      if (result.ok) {
+        heartbeatStats.sent += 1;
+      } else {
+        heartbeatStats.missing += 1;
+        logger.warn('client.heartbeatMissing', {
+          uuid,
+          message: 'server has no record for this uuid (deleted?); next report recreates it',
+        });
+      }
+    } catch (error) {
+      heartbeatStats.failed += 1;
+      logger.debug('client.heartbeatError', { uuid, error: String(error) });
+    }
+  };
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  if (config.heartbeatIntervalMs > 0) {
+    // 持久化身份预载：存在则心跳可立即携带；不存在则等 Reporter 首次上报采用后再生效
+    void (async () => {
+      try {
+        heartbeatUuid = (await identityStore.load())?.uuid;
+      } catch (error) {
+        logger.error('client.heartbeatIdentityLoadError', { error: String(error) });
+      }
+      await heartbeatTick();
+    })();
+    heartbeatTimer = setInterval(() => {
+      void heartbeatTick();
+    }, config.heartbeatIntervalMs);
+    // 不阻止 pi 进程退出（生产路径 stop() 不可达：扩展入口丢弃 components）
+    heartbeatTimer.unref();
+  }
+
   const reporter = new Reporter({
     source,
     env: envProvider,
@@ -217,12 +263,16 @@ export async function createAgentBoard(
       unsubscribe();
     }
     unsubscribeAll();
+    if (heartbeatTimer !== undefined) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
     await reporter.stop();
     // 等待全部排队异步文件写落盘（身份 / 日志）。
     await Promise.all([identityStore.flush(), logger.flush()]);
   };
 
-  return { reporter, stop };
+  return { reporter, heartbeatStats, stop };
 }
 
 /** 从 ExtensionContext 构建可采样环境快照（ctx 缺省时回落进程级默认值）。 */

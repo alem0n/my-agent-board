@@ -24,6 +24,8 @@ export interface AgentRecord {
   sessionId: string;
   firstSeen: number;
   lastSeen: number;
+  /** 最近一次心跳时间戳（REQ-013）；0 = 从未心跳。 */
+  lastHeartbeat: number;
   reportCount: number;
   protocolVersion: string;
   /** 逐状态最新载荷。 */
@@ -40,8 +42,12 @@ export interface AgentSummary {
   sessionId: string;
   firstSeen: number;
   lastSeen: number;
+  /** 最近一次心跳时间戳（REQ-013）；0 = 从未心跳。 */
+  lastHeartbeat: number;
   reportCount: number;
   stateCount: number;
+  /** 派生在线状态（基于 lastSeen 与 lastHeartbeat，REQ-013）。 */
+  online: boolean;
   /** 最后上报的状态标识（latest 中时间戳最大者；无上报时为 null）。 */
   lastState: string | null;
 }

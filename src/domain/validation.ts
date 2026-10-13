@@ -25,7 +25,7 @@ export interface ValidationResult {
   errors: FieldError[];
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const good = (): ValidationResult => ({ ok: true, errors: [] });
 const bad = (field: string, code: string, message: string): ValidationResult => ({

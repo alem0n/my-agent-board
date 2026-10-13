@@ -2,13 +2,14 @@
  * HttpTransport：client 侧 HTTP 传输实现（infrastructure 层）。
  *
  * 职责契约：
- * - 实现 Transport 端口：POST /v1/report/batch 与 GET /v1/health。
+ * - 实现 Transport 端口：POST /v1/report/batch、GET /v1/health、POST /v1/heartbeat。
  * - 超时控制（AbortSignal.timeout）、413 拆分信号、协议错误转译为领域错误。
  * - 不做重试（重试策略在 services 层 Reporter 中编排）。
  * 设计文档：docs/DESIGN.md §6.1、§6.3。
  */
 import type { BoardLogger } from '../domain/logging.js';
 import type { ReportEnvelope, ReportResponse, RejectedReport } from '../domain/contracts.js';
+import type { HeartbeatResult } from '../domain/ports.js';
 import { ERROR_CODES, BatchTooLargeError } from '../domain/errors.js';
 import type { Transport } from '../domain/ports.js';
 
@@ -64,6 +65,29 @@ export class HttpTransport implements Transport {
     }
     const message = extractErrorMessage(body);
     throw new Error(`batch rejected (status ${response.status}): ${message}`);
+  }
+
+  async postHeartbeat(uuid: string): Promise<HeartbeatResult> {
+    const url = `${this.options.serverUrl}/v1/heartbeat`;
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ uuid }),
+        signal: AbortSignal.timeout(this.options.requestTimeoutMs),
+      });
+    } catch (error) {
+      throw new Error(`heartbeat request failed: ${String(error)}`);
+    }
+    if (response.status === 404) {
+      return { ok: false, missing: true };
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`heartbeat rejected (status ${response.status}): ${text.slice(0, 200)}`);
+    }
+    return { ok: true };
   }
 
   async health(): Promise<boolean> {

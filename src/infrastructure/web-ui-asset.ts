@@ -54,6 +54,9 @@ const STYLES = `
   .error { color: #e5707a; font-size: 13px; padding: 8px; }
   .empty { color: #7a8794; font-size: 13px; padding: 12px 0; }
   .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 2px; }
+  .dot-on { background: #2ea043; }
+  .dot-off { background: #6e7681; }
   select, input[type='number'] {
     background: #1f2730; color: #dbe2ea; border: 1px solid #303a45;
     border-radius: 6px; padding: 5px 8px; font-size: 13px;
@@ -143,6 +146,8 @@ const SCRIPT = `
     var rows = agents.map(function (a) {
       var cls = 'clickable' + (a.uuid === selectedUuid ? ' selected' : '');
       return '<tr class="' + cls + '" data-uuid="' + esc(a.uuid) + '">'
+        + '<td><span class="dot ' + (a.online ? 'dot-on' : 'dot-off') + '" title="'
+        + (a.online ? '在线' : '离线') + '"></span></td>'
         + '<td><span class="state-label" title="' + esc(a.lastState) + '">'
         + esc(stateLabel(a.lastState)) + '<span class="raw">' + esc(a.lastState || '') + '</span>'
         + '</span></td>'
@@ -155,7 +160,7 @@ const SCRIPT = `
         + '</tr>';
     }).join('');
     document.getElementById('agentRows').innerHTML = rows
-      || '<tr><td colspan="7" class="empty">暂无 agent 上报</td></tr>';
+      || '<tr><td colspan="8" class="empty">暂无 agent 上报</td></tr>';
     var nodes = document.querySelectorAll('#agentRows tr.clickable');
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].addEventListener('click', function (event) {
@@ -208,6 +213,10 @@ const SCRIPT = `
           }).join('') || '<tr><td colspan="3"><p class="empty">无历史</p></td></tr>';
           document.getElementById('detail').innerHTML =
             '<h2>' + esc(agent.name) + ' <span class="uuid">' + esc(agent.uuid) + '</span></h2>'
+            + '<p class="meta"><span class="dot ' + (agent.online ? 'dot-on' : 'dot-off') + '"></span>'
+            + (agent.online ? '在线' : '离线')
+            + ' · lastSeen ' + relativeTime(agent.lastSeen)
+            + ' · lastHeartbeat ' + (agent.lastHeartbeat ? relativeTime(agent.lastHeartbeat) : '从未') + '</p>'
             + '<div class="toolbar">'
             + '<label>状态 <select id="stateFilter"><option value="">全部状态</option>' + stateOptions + '</select></label>'
             + '<label>条数 <input id="historyLimit" type="number" min="1" max="200" value="' + limit + '"></label>'
@@ -280,7 +289,7 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   <section class="panel">
     <h2>Agents</h2>
     <table>
-      <thead><tr><th>状态</th><th>name</th><th>cwd</th><th>lastSeen</th><th>states</th><th class="num">reports</th><th>uuid</th></tr></thead>
+      <thead><tr><th title="在线状态（REQ-013：近 60s 有上报或心跳）">在线</th><th>状态</th><th>name</th><th>cwd</th><th>lastSeen</th><th>states</th><th class="num">reports</th><th>uuid</th></tr></thead>
       <tbody id="agentRows"></tbody>
     </table>
   </section>

@@ -32,6 +32,8 @@ export interface ClientConfig {
   maxBufferSize: number;
   /** 缓冲达到该条数立即触发 flush。 */
   flushOnCount: number;
+  /** 进程级心跳周期（REQ-013）；0 = 关闭。 */
+  heartbeatIntervalMs: number;
   /** 发送失败重试与断线重连参数。 */
   retry: RetryConfig;
   /** 日志级别：未配置即 silent（client 默认零日志，显式配置才开启）。 */
@@ -53,6 +55,7 @@ export const DEFAULT_CLIENT_CONFIG: Omit<ClientConfig, 'issues'> = {
   requestTimeoutMs: 5_000,
   maxBufferSize: 1_000,
   flushOnCount: 50,
+  heartbeatIntervalMs: 20_000,
   retry: {
     maxAttempts: 5,
     initialDelayMs: 500,
@@ -68,7 +71,25 @@ const BOUNDS: Record<string, { min: number; max: number }> = {
   requestTimeoutMs: { min: 500, max: 60_000 },
   maxBufferSize: { min: 10, max: 100_000 },
   flushOnCount: { min: 1, max: 100_000 },
+  heartbeatIntervalMs: { min: 1_000, max: 3_600_000 },
 };
+
+/** 心跳周期特判：0 = 显式关闭（其余非法值降级为默认并记 issue）。 */
+function parseHeartbeatInterval(source: Record<string, unknown>, issues: ConfigIssue[]): number {
+  const value = source['heartbeatIntervalMs'];
+  if (value === undefined) {
+    return DEFAULT_CLIENT_CONFIG.heartbeatIntervalMs;
+  }
+  if (value === 0) {
+    return 0;
+  }
+  return parseNamedNumber(
+    source,
+    'heartbeatIntervalMs',
+    DEFAULT_CLIENT_CONFIG.heartbeatIntervalMs,
+    issues,
+  );
+}
 
 function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === 'string' && (LOG_LEVELS as ReadonlyArray<string>).includes(value);
@@ -264,6 +285,7 @@ export function parseClientConfig(
     'requestTimeoutMs',
     'maxBufferSize',
     'flushOnCount',
+    'heartbeatIntervalMs',
     'retry',
   ]);
   for (const key of Object.keys(source)) {
@@ -290,6 +312,7 @@ export function parseClientConfig(
     ),
     maxBufferSize: parseNamedNumber(source, 'maxBufferSize', fallback.maxBufferSize, issues),
     flushOnCount: parseNamedNumber(source, 'flushOnCount', fallback.flushOnCount, issues),
+    heartbeatIntervalMs: parseHeartbeatInterval(source, issues),
     retry: parseRetry(source['retry'], issues),
     ...(logLevel === undefined ? {} : { logLevel }),
     issues,

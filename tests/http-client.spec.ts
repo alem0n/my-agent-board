@@ -157,4 +157,50 @@ describe('HttpTransport', () => {
     const transport = makeTransport(`http://127.0.0.1:${await freedPort()}`);
     await expect(transport.postBatch([])).rejects.toThrow(/batch request failed/);
   });
+
+  it('心跳：200 → ok；404 → missing；其他非 2xx → 抛异常', async () => {
+    const url = await start((request, response) => {
+      if (request.url === '/v1/heartbeat' && request.method === 'POST') {
+        let text = '';
+        request.on('data', (chunk: Buffer) => {
+          text += chunk.toString('utf8');
+        });
+        request.on('end', () => {
+          const parsed = JSON.parse(text) as { uuid?: string };
+          if (parsed['uuid'] === '11111111-1111-1111-1111-111111111111') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ ok: true, uuid: parsed['uuid'] }));
+          } else if (parsed['uuid'] === '22222222-2222-2222-2222-222222222222') {
+            response.writeHead(404, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: { code: 'E_NOT_FOUND' } }));
+          } else {
+            response.writeHead(500, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ error: { code: 'E_INTERNAL' } }));
+          }
+        });
+        return;
+      }
+      response.writeHead(404);
+      response.end('{}');
+    });
+    const transport = makeTransport(url);
+
+    expect(await transport.postHeartbeat('11111111-1111-1111-1111-111111111111')).toEqual({
+      ok: true,
+    });
+    expect(await transport.postHeartbeat('22222222-2222-2222-2222-222222222222')).toEqual({
+      ok: false,
+      missing: true,
+    });
+    await expect(transport.postHeartbeat('33333333-3333-3333-3333-333333333333')).rejects.toThrow(
+      /heartbeat rejected \(status 500\)/,
+    );
+  });
+
+  it('心跳网络失败抛异常（不进重试队列，由调用方计数）', async () => {
+    const transport = makeTransport(`http://127.0.0.1:${await freedPort()}`);
+    await expect(transport.postHeartbeat('11111111-1111-1111-1111-111111111111')).rejects.toThrow(
+      /heartbeat request failed/,
+    );
+  });
 });

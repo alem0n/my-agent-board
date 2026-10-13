@@ -14,7 +14,7 @@ import { Reporter, MAX_BATCH } from '../src/services/reporter.js';
 import { computeBackoffDelay, retryWithBackoff } from '../src/services/retry.js';
 import { BatchTooLargeError, type ReportEnvelope } from '../src/domain/errors.js';
 import type { ReportResponse } from '../src/domain/contracts.js';
-import type { IdentityStore, Transport } from '../src/domain/ports.js';
+import type { IdentityStore, Transport, HeartbeatResult } from '../src/domain/ports.js';
 import { silentLogger } from '../src/domain/logging.js';
 import { buildEnvelope } from './fixtures/samples.js';
 
@@ -49,6 +49,13 @@ class ScriptedTransport implements Transport {
     this.healthCalls += 1;
     return this.healthCalls > this.healthOkAfter;
   }
+
+  public heartbeats: string[] = [];
+
+  async postHeartbeat(uuid: string): Promise<HeartbeatResult> {
+    this.heartbeats.push(uuid);
+    return { ok: true };
+  }
 }
 
 /** 手动控制的传输：postBatch 挂起直到 resolveBatch 被调用（测试关闭路径与进行中 flush 的并发）。 */
@@ -71,6 +78,10 @@ class ManualTransport implements Transport {
 
   async health(): Promise<boolean> {
     return true;
+  }
+
+  async postHeartbeat(_uuid: string): Promise<HeartbeatResult> {
+    return { ok: true };
   }
 }
 
@@ -129,6 +140,7 @@ const baseConfig = {
   requestTimeoutMs: 5_000,
   maxBufferSize: 100,
   flushOnCount: 10_000,
+  heartbeatIntervalMs: 0,
   retry: {
     maxAttempts: 5,
     initialDelayMs: 500,

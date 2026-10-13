@@ -13,6 +13,7 @@
  *   GET  /v1/agents/:uuid        单 agent 注册记录 + 逐状态最新载荷
  *   GET  /v1/agents/:uuid/history?state=&limit=&since=   历史记录
  *   DELETE /v1/agents/:uuid      删除 agent 条目（治理操作：请求即授权，无本地研判）
+ *   POST /v1/heartbeat           进程级心跳：更新 lastHeartbeat（REQ-013；不创建记录）
  *   GET  /v1/health              健康检查
  *   GET  / 或 /ui                内置 Web UI（仅 --web 启用时；否则 404）
  */
@@ -23,7 +24,7 @@ import type { AgentRegistry } from '../services/registry.js';
 import type { BoardLogger } from '../domain/logging.js';
 import { PROTOCOL_VERSION, type BatchRequest, type ReportEnvelope } from '../domain/contracts.js';
 import { ERROR_CODES } from '../domain/errors.js';
-import { validateEnvelope, type FieldError } from '../domain/validation.js';
+import { validateEnvelope, UUID_PATTERN, type FieldError } from '../domain/validation.js';
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_BATCH_REPORTS = 512;
@@ -128,7 +129,7 @@ export class BoardHttpServer {
         return;
       }
       if (path === '/v1/agents' && method === 'GET') {
-        this.writeJson(response, 200, { agents: this.registry.list() });
+        this.writeJson(response, 200, { agents: this.registry.list(this.options.now()) });
         return;
       }
       if (path === '/v1/report' && method === 'POST') {
@@ -138,6 +139,11 @@ export class BoardHttpServer {
       }
       if (path === '/v1/report/batch' && method === 'POST') {
         const result = await this.handleBatchReport(request);
+        this.writeJson(response, result.status, result.body);
+        return;
+      }
+      if (path === '/v1/heartbeat' && method === 'POST') {
+        const result = await this.handleHeartbeat(request);
         this.writeJson(response, result.status, result.body);
         return;
       }
@@ -168,16 +174,28 @@ export class BoardHttpServer {
         return;
       }
 
+      const agentSubPath = /^\/v1\/agents\/[^/]+(\/history)?$/.test(path);
       const knownPath =
         (this.options.webUi && (path === '/' || path === '/ui')) ||
         path === '/v1/health' ||
         path === '/v1/agents' ||
         path === '/v1/report' ||
         path === '/v1/report/batch' ||
-        /^\/v1\/agents\/[^/]+(\/history)?$/.test(path);
+        path === '/v1/heartbeat' ||
+        agentSubPath;
       const deleteOnAgent =
         method === 'DELETE' && /^\/v1\/agents\/[^/]+$/.test(path) && !path.endsWith('/history');
-      if (knownPath && method !== 'GET' && method !== 'POST' && !deleteOnAgent) {
+      // 方法级允许表：/v1/heartbeat 仅允许 POST（其 GET 无处理器 → 405 而非 404）
+      const methodAllowed =
+        (method === 'GET' &&
+          ((this.options.webUi && (path === '/' || path === '/ui')) ||
+            path === '/v1/health' ||
+            path === '/v1/agents' ||
+            agentSubPath)) ||
+        (method === 'POST' &&
+          (path === '/v1/report' || path === '/v1/report/batch' || path === '/v1/heartbeat')) ||
+        deleteOnAgent;
+      if (knownPath && !methodAllowed) {
         this.writeJson(
           response,
           405,
@@ -327,7 +345,7 @@ export class BoardHttpServer {
     return {
       status: 'ok',
       protocolVersion: PROTOCOL_VERSION,
-      agents: this.registry.list().length,
+      agents: this.registry.list(this.options.now()).length,
       uptimeMs: this.uptimeMs,
     };
   }
@@ -340,7 +358,35 @@ export class BoardHttpServer {
         body: this.errorBody(ERROR_CODES.NOT_FOUND, `agent '${uuid}' not found`),
       };
     }
-    return { status: 200, body: record };
+    return {
+      status: 200,
+      body: { ...record, online: this.registry.isOnline(uuid, this.options.now()) },
+    };
+  }
+
+  private async handleHeartbeat(request: http.IncomingMessage): Promise<RouteResult> {
+    const body = await this.readBody(request);
+    if (!body.ok) {
+      return { status: body.status, body: body.error };
+    }
+    const value = body.value;
+    const uuid = (value as { uuid?: unknown })?.['uuid'];
+    if (typeof uuid !== 'string' || !UUID_PATTERN.test(uuid)) {
+      return {
+        status: 400,
+        body: this.errorBody(
+          ERROR_CODES.INVALID_ENVELOPE,
+          'heartbeat body must be { uuid: string }',
+        ),
+      };
+    }
+    if (!this.registry.heartbeat(uuid, this.options.now())) {
+      return {
+        status: 404,
+        body: this.errorBody(ERROR_CODES.NOT_FOUND, `agent '${uuid}' not found`),
+      };
+    }
+    return { status: 200, body: { ok: true, uuid } };
   }
 
   private agentHistory(uuid: string, url: URL): RouteResult {

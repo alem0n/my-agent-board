@@ -37,6 +37,7 @@
 - 首次通信（无 uuid）由 server 分配全局唯一 uuid 并返回；client 持久化到 `~/.pi/agent/agent-board-identity.json`，后续上报携带。
 - 持久化失败：明确错误日志 + 降级（每次会话由 server 分配新 uuid）。
 - uuid 为请求级信任字段：client 携带即被信任（记录不存在则按该 uuid 建立）；未携带时 server 为整个请求分配一个 uuid 并返回 `assigned:true`，client 采用并持久化。一个批量请求共用首个 uuid。
+- 心跳请求同样携带 uuid（REQ-013），信任来源一致。
 - 重复注册：同 uuid 再注册复用；无 uuid 再注册 → 新 uuid（重复条目由 DELETE 治理，server 不研判合并）。
 - name/cwd 变化：保留 uuid，更新注册信息，记录 `identity_change` 历史。
 
@@ -56,7 +57,8 @@
 
 - `POST /v1/report`、`POST /v1/report/batch`（原子批，任一非法整体拒绝并返回逐条错误）。
 - 注册表维护 uuid、name、cwd、sessionId、firstSeen、lastSeen、reportCount、逐状态 latest、上限历史。
-- `GET /v1/agents`、`GET /v1/agents/:uuid`、`GET /v1/agents/:uuid/history`、`GET /v1/health`。
+- `GET /v1/agents`、`GET /v1/agents/:uuid`、`GET /v1/agents/:uuid/history`、`GET /v1/health`；响应含派生在线状态（`online` / `lastHeartbeat`，REQ-013）。
+- `POST /v1/heartbeat`：更新 `lastHeartbeat`，记录不存在返回 404，不创建记录（REQ-013）。
 - `DELETE /v1/agents/:uuid`：删除 agent 条目（latest + 历史一并删除），不存在返回 404。治理操作**请求即授权，server 不做本地研判**（无鉴权实现）。
 - 非法请求返回明确错误码（见 DESIGN.md §6）。
 
@@ -84,6 +86,16 @@
 - 仅当用户显式配置时开启：配置文件 `logLevel` 字段，或环境变量 `AGENT_BOARD_LOG_LEVEL`（后者优先级更高，作为配置文件自身损坏时的诊断入口）。
 - 取值 `silent` / `trace` / `debug` / `info` / `warn` / `error`；非法值记 issue 并保持 silent。
 - 开启后日志为 JSON 行异步写入 `~/.pi/agent/agent-board-client.log`（串行写队列，不阻塞 pi 主线程，关闭时 flush 落盘）。
+
+### REQ-013 在线检测（心跳 + 派生状态）
+
+- 目标：server 能判断 client（pi 进程）是否在线，覆盖**无活跃会话**的静默期（REQ-004 的身份上报是会话级的：`session_start` 到 `session_shutdown` 之间）。
+- client 进程级心跳：扩展**加载时**启动（与 session 生命周期解耦），周期 `heartbeatIntervalMs`（默认 20s，0 = 关闭）从 `agent-board-server.json` 配置。
+- 心跳携带身份 uuid（信任来源与 REQ-004 一致：请求即信任）；uuid 尚未建立（身份文件不存在且从未上报）时跳过本周，不伪造身份。
+- server 端点 `POST /v1/heartbeat`（body `{uuid}`）：记录存在则更新 `lastHeartbeat` 并返回 200；不存在返回 404（心跳**不创建/不复活**记录——DELETE 治理与下次真实上报才重建）。
+- 派生状态：`online = now - max(lastSeen, lastHeartbeat) <= 60s`（阈值 = 3 × 默认心跳周期，覆盖网络抖动），经 `/v1/agents` 列表与 `GET /v1/agents/:uuid` 的 `online` 字段暴露；`lastHeartbeat` 一并暴露（0 = 从未心跳）。
+- 心跳为通信探测，不作为监控状态落库（不写 latest、不计 reportCount、不入 history）。
+- client 侧失败不阻塞采集、不进入重试队列（下一周期自然重试）；定时器 `unref()`，不阻止 pi 进程退出。
 
 ## 设计决策
 

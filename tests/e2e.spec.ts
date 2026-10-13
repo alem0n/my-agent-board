@@ -47,6 +47,7 @@ function makeReporter(name?: string) {
     requestTimeoutMs: 5_000,
     maxBufferSize: 500,
     flushOnCount: 10_000,
+    heartbeatIntervalMs: 0,
     retry: { maxAttempts: 3, initialDelayMs: 10, maxDelayMs: 100, backoffFactor: 2, jitter: false },
     issues: [],
   };
@@ -140,6 +141,64 @@ describe('端到端：全状态上报与身份流', () => {
     expect(health['protocolVersion']).toBe('1');
     expect(typeof health['agents']).toBe('number');
   });
+});
+
+describe('端到端：心跳与在线状态（REQ-013）', () => {
+  it('心跳更新 lastHeartbeat；online/lastHeartbeat 经列表与单查暴露', async () => {
+    const { reporter } = makeReporter();
+    reporter.start();
+    await reporter.collectSnapshotAndFlush();
+    const uuid = reporter.currentIdentity!.uuid;
+    await reporter.stop();
+
+    const beat = await postJson('/v1/heartbeat', { uuid });
+    expect(beat.status).toBe(200);
+    expect((beat.body as Record<string, unknown>)['ok']).toBe(true);
+
+    const record = (await getJson(`/v1/agents/${uuid}`)).body as Record<string, unknown>;
+    expect(record['lastHeartbeat']).toBeGreaterThan(0);
+    expect(record['online']).toBe(true);
+    const agents = (await getJson('/v1/agents')).body as {
+      agents: Array<Record<string, unknown>>;
+    };
+    const summary = agents.agents.find((agent) => agent['uuid'] === uuid);
+    expect(summary?.['online']).toBe(true);
+    expect(summary?.['lastHeartbeat']).toBeGreaterThan(0);
+    // 心跳不作为监控状态落库（不改 reportCount、不写 latest）
+    const before = (await getJson(`/v1/agents/${uuid}`)).body as Record<string, unknown>;
+    const reportCountBefore = before['reportCount'];
+    expect(reportCountBefore).toBeGreaterThan(0);
+    expect(record['reportCount']).toBe(reportCountBefore);
+    expect((record['latest'] as Record<string, unknown>)['heartbeat']).toBeUndefined();
+  }, 30_000);
+
+  it('心跳不创建/复活记录：未知 uuid → 404；DELETE 后心跳 → 404', async () => {
+    const unknown = '00000000-0000-0000-0000-0000000000ff';
+    const missing = await postJson('/v1/heartbeat', { uuid: unknown });
+    expect(missing.status).toBe(404);
+    expect(
+      ((missing.body as Record<string, unknown>)['error'] as Record<string, unknown>)['code'],
+    ).toBe('E_NOT_FOUND');
+
+    const { reporter } = makeReporter();
+    reporter.start();
+    await reporter.collectSnapshotAndFlush();
+    const uuid = reporter.currentIdentity!.uuid;
+    await reporter.stop();
+    const deleted = await fetch(`${baseUrl}/v1/agents/${uuid}`, { method: 'DELETE' });
+    expect(deleted.status).toBe(200);
+    const afterDelete = await postJson('/v1/heartbeat', { uuid });
+    expect(afterDelete.status).toBe(404);
+  }, 30_000);
+
+  it('心跳 body 缺 uuid 或非法 → 400；GET /v1/heartbeat → 405', async () => {
+    const empty = await postJson('/v1/heartbeat', {});
+    expect(empty.status).toBe(400);
+    const malformed = await postJson('/v1/heartbeat', { uuid: 'not-a-uuid' });
+    expect(malformed.status).toBe(400);
+    const methodNotAllowed = await fetch(`${baseUrl}/v1/heartbeat`, { method: 'GET' });
+    expect(methodNotAllowed.status).toBe(405);
+  }, 30_000);
 });
 
 describe('端到端：server 端契约校验与错误码', () => {

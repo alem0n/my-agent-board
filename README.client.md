@@ -49,7 +49,9 @@ pi --extension ./extension/agent-board.ts
 }
 ```
 
-字段：`url`（或 `host`+`port`）、`name`、`logLevel`、`reportIntervalMs`、`flushIntervalMs`、`requestTimeoutMs`、`maxBufferSize`、`flushOnCount`、`retry`。非法值一律降级默认，不静默失败。
+字段：`url`（或 `host`+`port`）、`name`、`logLevel`、`reportIntervalMs`、`flushIntervalMs`、`requestTimeoutMs`、`maxBufferSize`、`flushOnCount`、`heartbeatIntervalMs`（默认 20s，`0` = 关闭）、`retry`。非法值一律降级默认，不静默失败。
+
+**进程级心跳**：扩展加载即启动（与 session 生命周期解耦），周期性向 server 发送携带身份 uuid 的心跳，使 server 能在无活跃会话的静默期判断本进程是否在线（server 侧 `online` 派生，见 README.server）。身份尚未建立时跳过（不伪造身份）；失败不进入重试队列（下一周期自然重试）。
 
 环境变量 `AGENT_BOARD_SERVER_CONFIG` 可覆盖配置文件路径。
 

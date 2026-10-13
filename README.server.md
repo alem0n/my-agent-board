@@ -60,6 +60,10 @@ kill <PID>                          # 或 kill -9 <PID>
 | GET | `/v1/agents/:uuid/history?state=&limit=&since=` | 历史记录 |
 | POST | `/v1/report` | 单信封上报 |
 | POST | `/v1/report/batch` | 批量上报（原子批，上限 512 条 / 4MB） |
+| POST | `/v1/heartbeat` | 进程级心跳：`{uuid}` → 更新 `lastHeartbeat`，记录不存在返回 404（不创建记录） |
+| DELETE | `/v1/agents/:uuid` | 删除 agent 条目（治理操作，请求即授权） |
+
+**在线判定**：`online = now - max(lastSeen, lastHeartbeat) ≤ 60s`（3 × 默认心跳周期 20s），见 `/v1/agents` 响应的 `online` / `lastHeartbeat` 字段。心跳由 client 扩展加载时启动（与 session 解耦），无活跃会话时也能判断 pi 进程是否在线。
 
 ```bash
 curl http://127.0.0.1:7878/v1/health

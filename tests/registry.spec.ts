@@ -17,9 +17,13 @@ function sameAgent(uuid: string): ReportEnvelope['agent'] {
   return { ...AGENT, uuid };
 }
 
-function makeRegistry(options?: { historyLimit?: number }): AgentRegistry {
+function makeRegistry(options?: {
+  historyLimit?: number;
+  onlineTimeoutMs?: number;
+}): AgentRegistry {
   return new AgentRegistry(silentLogger, {
     historyLimit: options?.historyLimit ?? 1000,
+    onlineTimeoutMs: options?.onlineTimeoutMs,
   });
 }
 
@@ -126,5 +130,59 @@ describe('历史与查询', () => {
     expect(list[0]?.firstSeen).toBeLessThanOrEqual(list[0]!.lastSeen);
     // 无上报的摘要（理论路径）：lastState 为 null
     expect(list[0]?.lastState).not.toBeNull();
+  });
+});
+
+describe('心跳与在线状态（REQ-013）', () => {
+  it('心跳更新 lastHeartbeat；online 由 max(lastSeen, lastHeartbeat) 派生', () => {
+    const registry = makeRegistry({ onlineTimeoutMs: 60_000 });
+    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    expect(registry.heartbeat(first.uuid, NOW + 10_000)).toBe(true);
+    // NOW+10s：lastSeen=NOW（10s 前）在 60s 窗口内 → 在线
+    expect(registry.list(NOW + 10_000)[0]?.online).toBe(true);
+    // NOW+80s：两次活动都在窗口外 → 离线
+    expect(registry.list(NOW + 80_000)[0]?.online).toBe(false);
+    // 说明文字：心跳比 lastSeen 新时仍按最新者派生
+    expect(registry.list(NOW + 10_000)[0]).toMatchObject({
+      lastHeartbeat: NOW + 10_000,
+      online: true,
+    });
+  });
+
+  it('心跳不创建/不复活记录：未知 uuid 返回 false，list 不增', () => {
+    const registry = makeRegistry();
+    registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    expect(registry.heartbeat('00000000-0000-0000-0000-0000000000ff', NOW)).toBe(false);
+    expect(registry.list()).toHaveLength(1);
+  });
+
+  it('delete 后心跳即 404（记录不存在）; 仍未上报时 online=false', () => {
+    const registry = makeRegistry();
+    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    registry.heartbeat(first.uuid, NOW);
+    registry.delete(first.uuid);
+    expect(registry.heartbeat(first.uuid, NOW + 10_000)).toBe(false);
+    expect(registry.list()).toHaveLength(0);
+    expect(registry.isOnline(first.uuid)).toBe(false);
+  });
+
+  it('会话静默期靠心跳维持在线：lastSeen 老、lastHeartbeat 新', () => {
+    const registry = makeRegistry({ onlineTimeoutMs: 60_000 });
+    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    // 会话已关闭 5 分钟（session_shutdown 后静默），但进程级心跳持续
+    registry.heartbeat(first.uuid, NOW + 300_000);
+    expect(registry.list(NOW + 310_000)[0]?.online).toBe(true);
+  });
+
+  it('无心跳且上报陈旧 → 离线（online 在窗口外）', () => {
+    const registry = makeRegistry({ onlineTimeoutMs: 60_000 });
+    registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    expect(registry.list(NOW + 61_000)[0]?.online).toBe(false);
+  });
+
+  it('边界：恰 = 窗口宽度的时刻仍在线（闭区间）', () => {
+    const registry = makeRegistry({ onlineTimeoutMs: 60_000 });
+    registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    expect(registry.list(NOW + 60_000)[0]?.online).toBe(true);
   });
 });

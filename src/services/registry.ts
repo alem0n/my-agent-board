@@ -2,8 +2,9 @@
  * AgentRegistry：server 侧 uuid 分配、注册表维护与聚合查询（services 层）。
  *
  * 职责契约：
- * - ingest() 为唯一写入入口：uuid 信任来源 = client 请求携带的 uuid（server 不研判：
+ * - ingest() 为状态写入入口：uuid 信任来源 = client 请求携带的 uuid（server 不研判：
  *   携带即复用，记录不存在则按该 uuid 建立）；client 未携带时才分配新 uuid。
+ * - heartbeat() 为在线探测写入入口（REQ-013）：只更新 lastHeartbeat，不创建记录。
  * - delete() 为治理入口：显式删除条目，请求即授权（无本地研判）。
  * - 注册表为纯内存（REQ-008）：不写盘、无快照加载/去抖写队列；重启即清空。
  * - 全部方法对内存模型同步操作（JS 单线程天然串行）。
@@ -23,6 +24,8 @@ import type { BoardLogger } from '../domain/logging.js';
 export interface RegistryOptions {
   /** 每个 agent 的历史上限（默认 1000）。 */
   historyLimit?: number;
+  /** 派生在线状态的判定窗口（默认 60s = 3 × 心跳周期，REQ-013）。 */
+  onlineTimeoutMs?: number;
 }
 
 export interface IngestResult {
@@ -35,10 +38,12 @@ export class AgentRegistry {
   private readonly agents = new Map<string, AgentRecord>();
   private readonly logger: BoardLogger;
   private readonly historyLimit: number;
+  private readonly onlineTimeoutMs: number;
 
   constructor(logger: BoardLogger, options: RegistryOptions = {}) {
     this.logger = logger;
     this.historyLimit = options.historyLimit ?? 1000;
+    this.onlineTimeoutMs = options.onlineTimeoutMs ?? 60_000;
   }
 
   /** 摄入一条已通过契约校验的上报信封，返回 uuid 处理结果。 */
@@ -57,6 +62,7 @@ export class AgentRegistry {
         sessionId: envelope.agent.sessionId ?? '',
         firstSeen: serverNow,
         lastSeen: serverNow,
+        lastHeartbeat: 0,
         reportCount: 0,
         protocolVersion: envelope.protocolVersion,
         latest: {},
@@ -118,39 +124,63 @@ export class AgentRegistry {
     });
   }
 
-  list(): AgentSummary[] {
-    return [...this.agents.values()].map((record) => {
-      // 最后上报状态：history 按到达顺序追加，倒序找最近一条 report。
-      let lastState: string | null = null;
-      for (let i = record.history.length - 1; i >= 0; i -= 1) {
-        const entry = record.history[i];
-        if (entry !== undefined && entry.kind === 'report') {
-          lastState = entry.state ?? null;
-          break;
+  list(serverNow: number = Date.now()): AgentSummary[] {
+    return [...this.agents.values()].map((record) => this.toSummary(record, serverNow));
+  }
+
+  /** 心跳探测：更新 lastHeartbeat；记录不存在返回 false（404，不创建/不复活记录）。 */
+  heartbeat(uuid: string, serverNow: number): boolean {
+    const record = this.agents.get(uuid);
+    if (record === undefined) {
+      return false;
+    }
+    record.lastHeartbeat = serverNow;
+    return true;
+  }
+
+  /** 派生在线状态（REQ-013）；记录不存在时 undefined（调用方先判 404）。 */
+  isOnline(uuid: string, serverNow: number = Date.now()): boolean {
+    const record = this.agents.get(uuid);
+    return record === undefined ? false : this.recordOnline(record, serverNow);
+  }
+
+  private toSummary(record: AgentRecord, serverNow: number): AgentSummary {
+    // 最后上报状态：history 按到达顺序追加，倒序找最近一条 report。
+    let lastState: string | null = null;
+    for (let i = record.history.length - 1; i >= 0; i -= 1) {
+      const entry = record.history[i];
+      if (entry !== undefined && entry.kind === 'report') {
+        lastState = entry.state ?? null;
+        break;
+      }
+    }
+    if (lastState === null) {
+      // 回退：latest 中时间戳最大者（history 滚动截断或仅含 identity_change 时）。
+      let lastStateTs = -1;
+      for (const [state, entry] of Object.entries(record.latest)) {
+        if (entry.timestamp > lastStateTs) {
+          lastStateTs = entry.timestamp;
+          lastState = state;
         }
       }
-      if (lastState === null) {
-        // 回退：latest 中时间戳最大者（history 滚动截断或仅含 identity_change 时）。
-        let lastStateTs = -1;
-        for (const [state, entry] of Object.entries(record.latest)) {
-          if (entry.timestamp > lastStateTs) {
-            lastStateTs = entry.timestamp;
-            lastState = state;
-          }
-        }
-      }
-      return {
-        uuid: record.uuid,
-        name: record.name,
-        cwd: record.cwd,
-        sessionId: record.sessionId,
-        firstSeen: record.firstSeen,
-        lastSeen: record.lastSeen,
-        reportCount: record.reportCount,
-        stateCount: Object.keys(record.latest).length,
-        lastState,
-      };
-    });
+    }
+    return {
+      uuid: record.uuid,
+      name: record.name,
+      cwd: record.cwd,
+      sessionId: record.sessionId,
+      firstSeen: record.firstSeen,
+      lastSeen: record.lastSeen,
+      lastHeartbeat: record.lastHeartbeat,
+      reportCount: record.reportCount,
+      stateCount: Object.keys(record.latest).length,
+      online: this.recordOnline(record, serverNow),
+      lastState,
+    };
+  }
+
+  private recordOnline(record: AgentRecord, serverNow: number): boolean {
+    return serverNow - Math.max(record.lastSeen, record.lastHeartbeat) <= this.onlineTimeoutMs;
   }
 
   get(uuid: string): AgentRecord | undefined {

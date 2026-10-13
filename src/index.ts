@@ -35,6 +35,7 @@ export async function main(): Promise<number> {
     endpoints: [
       'POST /v1/report',
       'POST /v1/report/batch',
+      'POST /v1/heartbeat',
       'GET /v1/agents',
       'GET /v1/agents/:uuid',
       'GET /v1/agents/:uuid/history?state=&limit=&since=',

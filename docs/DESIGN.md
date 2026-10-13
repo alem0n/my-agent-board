@@ -331,6 +331,7 @@ interface StateContract {
 - 携带 uuid → 直接使用：记录不存在则按该 uuid 建立，`assigned=false`。
 - 未携带 uuid → server 为请求分配一个 uuid（单信封=该信封；批量=整批共用首个 uuid，见 §6.3），`assigned=true`，client 采用并持久化。
 - 重复/孤儿条目（client 身份丢失、uuid 弃用等）由 `DELETE /v1/agents/:uuid` 显式治理；server 不自行研判合并。
+- 心跳请求同样携带 uuid（REQ-013），信任来源与上报一致。
 - `crypto.randomUUID()` 保证全局唯一；注册表为纯内存，单进程内操作天生串行（§8）。
 
 ### 5.3 client 身份文件与降级
@@ -359,9 +360,10 @@ server 端查询 API 永远返回当前值 + 可查变化历史。
 |---|---|---|---|
 | POST | `/v1/report` | 单信封 | `200 { ok:true, uuid, assigned:boolean }` |
 | POST | `/v1/report/batch` | `{ reports: Envelope[] }`（≤512 条，body ≤4MB） | `200 { ok:true, accepted:n, uuid, assigned, rejected:[{index,code,message,state?}] }`（原子批：非法信封所在批次整体拒绝并逐条返回；client 剔除被拒条目后重试剩余；无 uuid 批量的信封共用本批首个 uuid，assigned 为请求级） |
-| GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastSeen,reportCount,stateCount}] }` |
+| GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastHeartbeat,reportCount,stateCount,online,lastState}] }`（`online` 为派生态：`now - max(lastSeen,lastHeartbeat) ≤ 60s`，REQ-013） |
 | DELETE | `/v1/agents/:uuid` | — | `200 { uuid, deleted:true }`；不存在 → `404 E_NOT_FOUND`。治理操作：请求即授权，server 不做本地研判 |
-| GET | `/v1/agents/:uuid` | — | `200 { …注册表当前值…, latest: Record<StateId,{timestamp,payload}> }` |
+| POST | `/v1/heartbeat` | `{ uuid }` | `200 { ok:true, uuid }`；记录不存在 → `404 E_NOT_FOUND`（心跳**不创建/不复活**记录）。进程级在线探测（REQ-013）：仅更新 `lastHeartbeat`，不写 latest、不计 reportCount、不入 history；GET该方法 → 405 |
+| GET | `/v1/agents/:uuid` | — | `200 { …注册表当前值…, latest: Record<StateId,{timestamp,payload}>, online }` |
 | GET | `/v1/agents/:uuid/history` | `?state=&limit=≤1000&since=epoch ms` | `200 { uuid, state?, entries:[HistoryEntry], truncated:boolean }` |
 | GET | `/v1/health` | — | `200 { status:"ok", protocolVersion:"1", agents:n, uptimeMs }` |
 
@@ -496,6 +498,7 @@ client                              server
 | A8 | 批量上报中部分非法时的语义 | 原子批拒绝 + client 剔除重试（§6.3 毒信处理） | 防毒信阻塞缓冲 |
 | A9 | server 重启后注册表是否保留 | 不保留：注册表纯内存，重启即清空 | 监控状态持续刷新，服务端状态无离线保留价值 |
 | A10 | 报告时间戳上限 | 超前 ≤60s、落后 ≤7 天 | 仅内存重试，离线窗口由恢复后的新采集覆盖 |
+| A12 | “在线”的判定来源 | 派生观测态：`max(lastSeen, lastHeartbeat) ≤ 60s`（3 × 默认心跳周期 REQ-013） | 不引入连接态研判；无活跃会话的静默期由进程级心跳覆盖；精度=心跳周期 |
 | A11 | client 与 server 是否共享文件存储实现 | 不共享：client 全异步（pi 交互进程不可阻塞主线程）；server 无文件存储（纯内存） | client 有静态守护测试 |
 
 **待确认项**：部署拓扑（单机/集群）、是否需要鉴权、`agent_snapshot` 采样频率业务预期值、状态内容字段是否需要可配置放开（当前无条件不上报）。
@@ -524,7 +527,7 @@ client                              server
 | `tests/identity.spec.ts` | 身份分配 | 首报分配、持久化、复用、携带即信任、server 重启旧 uuid 可用、DELETE 治理、name/cwd 变化、身份文件写失败降级 |
 | `tests/config.spec.ts` | 配置解析 | 6 类配置场景与降级 |
 | `tests/transport.spec.ts` | 重连重试 | 退避序列、重试耗尽保留缓冲、恢复后 flush、溢出丢弃、毒信剔除 |
-| `tests/registry.spec.ts` | 聚合存储 | latest 聚合、历史上限截断、查询 API |
-| `tests/e2e.spec.ts` | 端到端 | 真实 server + 真实 Reporter（模拟适配器）→ 42 状态全部到达、uuid 流、history 查询、部分拒绝 |
+| `tests/registry.spec.ts` | 聚合存储 | latest 聚合、历史上限截断、查询 API、心跳/在线派生（REQ-013）、心跳不复活记录 |
+| `tests/e2e.spec.ts` | 端到端 | 真实 server + 真实 Reporter（模拟适配器）→ 42 状态全部到达、uuid 流、history 查询、部分拒绝、DELETE 治理、心跳端点契约（REQ-013） |
 | `tests/mapper.spec.ts` | 映射正确性 | 42 状态映射器存在 + 输出契约合法（含隐私约束：无原文字段） |
 ```

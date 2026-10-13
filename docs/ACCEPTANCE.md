@@ -52,6 +52,7 @@
   - 无 uuid 的请求 → 分配新 uuid（`assigned:true`，重复条目由 DELETE 治理，见下条）；
   - client 携带的 uuid 被信任（记录不存在则按该 uuid 建立）；
 - server 不做身份研判（无 sticky / 无 replaced），孤儿或重复条目由 `DELETE /v1/agents/:uuid` 显式删除（不存在返回 404）；
+- 进程级心跳（REQ-013）：扩展加载即启动、与 session 解耦；携带 uuid（信任来源一致）；未建立身份时跳过；记录不存在 → 404 不复活；`online` 派生暴露于列表与单查（60s 窗口）；定时器 unref 不阻止 pi 退出；
 - 持久化失败（权限/非目录父路径）→ `identity.persistFailed` 错误日志 + 仅内存降级
   （`tests/transport.spec.ts`）；
 - name/cwd 变化：保留 uuid、更新注册信息、追加 `identity_change` 历史条目；

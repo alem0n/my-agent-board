@@ -26,6 +26,7 @@ const GOOD_URL_CONFIG = {
   requestTimeoutMs: 3_000,
   maxBufferSize: 500,
   flushOnCount: 20,
+  heartbeatIntervalMs: 5_000,
   retry: {
     maxAttempts: 3,
     initialDelayMs: 100,
@@ -136,6 +137,22 @@ describe('parseClientConfig（纯解析）', () => {
     expect(config.logLevel).toBeUndefined();
     expect(config.issues.map((issue) => issue.field)).toContain('logLevel');
   });
+});
+
+it('heartbeatIntervalMs：默认 20s；0 = 关闭；越界/类型错 → 默认 + issue', () => {
+  expect(parseClientConfig({ url: 'http://x' }).heartbeatIntervalMs).toBe(20_000);
+  expect(parseClientConfig({ url: 'http://x', heartbeatIntervalMs: 0 }).heartbeatIntervalMs).toBe(
+    0,
+  );
+  const tooSmall = parseClientConfig({ url: 'http://x', heartbeatIntervalMs: 500 });
+  expect(tooSmall.heartbeatIntervalMs).toBe(20_000);
+  expect(tooSmall.issues.map((issue) => issue.field)).toContain('heartbeatIntervalMs');
+  const notNumber = parseClientConfig({ url: 'http://x', heartbeatIntervalMs: 'fast' });
+  expect(notNumber.heartbeatIntervalMs).toBe(20_000);
+  expect(notNumber.issues.map((issue) => issue.field)).toContain('heartbeatIntervalMs');
+  expect(
+    parseClientConfig({ url: 'http://x', heartbeatIntervalMs: 5_000 }).heartbeatIntervalMs,
+  ).toBe(5_000);
 });
 
 describe('loadClientConfig（文件层）', () => {
