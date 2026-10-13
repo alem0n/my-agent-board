@@ -62,14 +62,15 @@
 |---|---|
 | 流式输出中 | `message_start`(assistant) 之后有 `message_update`、尚无 `message_end` |
 | 工具执行中 | `tool_execution_start` 尚无配对的 `tool_execution_end` |
-| 等待人工 | `ui_prompt_start` 尚无配对的 `ui_prompt_end`（kind 为 select/confirm/input/editor/custom） |
+| 等待输入 | `ui_prompt_start` 尚无配对的 `ui_prompt_end`，且 kind ∈ {input, editor, custom}（用户需键入内容） |
+| 等待人工 | 同上，且 kind ∈ {select, confirm}（用户选择/确认）；kind 缺失/未知时保守归此类 |
 | 压缩中 | `session_before_compact` 之后尚无 `session_compact`/`session_compact_failed` |
 | 空闲 | `agent_snapshot.isIdle` |
 | 离线 | `!online`（REQ-013） |
 
 配对按 `toolCallId`（工具）与事件先后（UI 提示）在 server 端历史内匹配。
 `ui_prompt_*` 与 `tool_execution_*` 均为 `event` 频率（无合并窗口），配对可靠。
-UI 提示的相位即"等待人工"，是注意队列的第一来源。
+UI 提示未闭合即阻塞在用户响应上，是注意队列的第一来源。按用户操作形态拆成两个相位：键入型（input/editor/custom）为“等待输入”，选择/确认型（select/confirm）为“等待人工”——看板一眼区分“需要你打字”与“只需你点选”。
 
 #### A2 注意队列（回答"哪个 agent 该我去管"）
 
@@ -77,7 +78,7 @@ UI 提示的相位即"等待人工"，是注意队列的第一来源。
 
 | 信号 | 派生条件 | 含义 |
 |---|---|---|
-| 阻塞等待人工 | A1 的等待人工相位 + 已等待时长 | 最直接的"去处理"信号 |
+| 阻塞等待人工 | A1 的等待人工/等待输入相位 + 已等待时长 | 最直接的“去处理”信号 |
 | run 异常终止 | `agent_before_settle.outcome ∈ {error, aborted}`；或 `message_end.stopReason ∈ {error, aborted}` | 需检查或重试 |
 | provider 不可用 | `after_provider_response.status ≥ 400`（429 限流 / 401-403 鉴权 / 5xx 服务端） | 需换模型或等待恢复 |
 | 压缩失败 | `session_compact_failed`（含 errorMessage） | 上下文压力未释放 |
@@ -144,7 +145,7 @@ B5 最隐蔽：监控自身的数据链路无监控。建议把传输统计周�
 | 标记 | 判定条件（现有数据派生） |
 |---|---|
 | `●` | online + 窗口内 0 错误 + `contextUsage.percent` 低（初值 <60%） |
-| `◐` | 任一低危信号：工具错误率 >30%、`status=429`、压缩频繁、等待人工、`contextUsage.percent >85%` |
+| `◐` | 任一低危信号：工具错误率 >30%、`status=429`、压缩频繁、等待人工/等待输入、`contextUsage.percent >85%` |
 | `!` | `agent_before_settle.outcome=error` / `message_end.stopReason=error` / 单次 5xx 或 401/403 / 长时停滞 |
 | `—` | `!online`（复用 REQ-013 判定，不重复评级） |
 

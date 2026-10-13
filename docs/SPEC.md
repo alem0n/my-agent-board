@@ -104,6 +104,7 @@
 - **健康度用文本符号（`●`/`◐`/`!`/`—`），不使用颜色**——沿用在线态 `✓`/`✗` 的既有符号约定（色盲友好、零外部资源）。
 - **P0 不改采集层契约**：全部派生只用现有 42 项状态。契约字段升级（`durationMs`/`cost`/`messageType` 等）为 P1 的独立加法式 MINOR 变更。
 - **交付状态**：P0-P3 全部完成。派生层 `src/domain/derivation.ts`（纯函数、单测）；P1/P3 契约升级为加法式 MINOR（`before_agent_start`/`message_end`/`tool_execution_end`/`agent_snapshot` → v1.1.0）；B5 传输健康并入 `agent_snapshot.transport`（不上报新状态，REQ-001 的 42 项不变）；响应字段见 DESIGN.md §6.1；Web UI 呈现见 `src/infrastructure/web-ui-asset.ts`。
+- **相位细分（A1 拆分）**：未闭合的 UI 提示按用户操作形态拆分——键入型（kind ∈ {input, editor, custom}）派生为独立相位 `awaiting-input`，选择/确认型（select/confirm）为 `waiting-human`；两者同为注意队列首位的阻塞信号（健康度 watch）。依据：pi 的 `ctx.ui.input/editor` 为文本输入、`select/confirm` 为按键选择、`custom` 为接管渲染与键鼠输入的重量级交互。kind 缺失/未知时保守归 `waiting-human`。
 - 设计细节与实施路线见 [BOARD.md](./BOARD.md)。
 
 ## 设计决策

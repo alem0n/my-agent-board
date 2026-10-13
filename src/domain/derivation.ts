@@ -17,9 +17,11 @@ import type {
   RunSummary,
 } from './derived-status.js';
 
-/** 运行相位（A1）。优先级：离线 > 等待人工 > 工具执行 > 压缩 > 流式 > 活动 > 空闲。 */
-// 类型定义（AgentPhase / HealthLevel / AttentionItem / DerivedHealth /
-// RunSummary / DerivedStatus / DeriveOptions）移至 derived-status.ts（解环）。
+// 运行相位（A1）的类型、取值与优先级统一定义在 derived-status.ts（类型移出以解环，避免双处维护）。
+
+/** 键入型 UI 提示（相位拆分，BOARD.md A1）：用户需键入内容而非选择/确认。
+ *  custom 归此类：pi 把 custom 组件定义为接管渲染与键鼠输入的重量级交互，操作负担与键入型一致。 */
+const INPUT_PROMPT_KINDS = new Set(['input', 'editor', 'custom']);
 
 const DEFAULT_WINDOW_MS = 5 * 60_000;
 const DEFAULT_STUCK_STREAMING_MS = 120_000;
@@ -204,7 +206,10 @@ function derivePhase(
     return 'offline';
   }
   if (markers.uiOpen) {
-    return 'waiting-human';
+    // kind 缺失或未知 → 保守归 waiting-human（与拆分前行为一致）。
+    return markers.uiOpenKind !== null && INPUT_PROMPT_KINDS.has(markers.uiOpenKind)
+      ? 'awaiting-input'
+      : 'waiting-human';
   }
   if (markers.toolOpen > 0) {
     return 'tool';
@@ -235,7 +240,8 @@ function deriveAttention(
   const aliveIndex = aliveStart(history);
 
   // 阻塞等待人工（BOARD.md A2 首位注意信号；severity 为 warn，健康度对应 ◐）。
-  if (phase === 'waiting-human' && markers.uiOpenSince !== null) {
+  // 等待输入/等待人工两相位都阻塞在用户响应上：共用同一信号与排队，detail 的 kind 区分形态。
+  if ((phase === 'waiting-human' || phase === 'awaiting-input') && markers.uiOpenSince !== null) {
     const secs = Math.max(0, Math.round((options.now - markers.uiOpenSince) / 1000));
     items.push({
       severity: 'warn',

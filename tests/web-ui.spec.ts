@@ -107,6 +107,7 @@ describe('Web UI 挂载契约', () => {
     );
     // 相位标签（A1）
     expect(WEB_UI_HTML).toContain("'waiting-human': '等待人工'");
+    expect(WEB_UI_HTML).toContain("'awaiting-input': '等待输入'");
     expect(WEB_UI_HTML).toContain("streaming: '流式输出中'");
     // KPI 条容器（C1）
     expect(WEB_UI_HTML).toContain('<div class="kpis" id="kpis"></div>');

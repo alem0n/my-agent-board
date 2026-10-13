@@ -63,7 +63,7 @@ describe('A1 运行相位', () => {
     expect(derive(record).phase).toBe('idle');
   });
 
-  it('ui_prompt_start 未闭合 → waiting-human（最高优先的活动信号）', () => {
+  it('ui_prompt_start(select/confirm) 未闭合 → waiting-human（最高优先的活动信号）', () => {
     const record = feed([
       { state: 'tool_execution_start', payload: { toolCallId: 't1' } },
       { state: 'ui_prompt_start', payload: { kind: 'confirm' } },
@@ -76,12 +76,33 @@ describe('A1 运行相位', () => {
     expect(status.health.level).toBe('watch');
   });
 
-  it('ui_prompt_start 被 ui_prompt_end 闭合后不再等待人工', () => {
+  it('ui_prompt_start(input/editor/custom) 未闭合 → awaiting-input（键入型单独相位）', () => {
+    for (const kind of ['input', 'editor', 'custom'] as const) {
+      const record = feed([{ state: 'ui_prompt_start', payload: { kind } }]);
+      const status = derive(record);
+      expect(status.phase).toBe('awaiting-input');
+      // 键入型同为阻塞信号：注意队列首位、健康度 watch
+      expect(status.health.attention[0]?.signal).toBe('waiting-human');
+      expect(status.health.attention[0]?.detail).toContain(kind);
+      expect(status.health.level).toBe('watch');
+    }
+  });
+
+  it('ui_prompt_start 的 kind 缺失或未知值 → 保守归 waiting-human', () => {
+    const missing = feed([{ state: 'ui_prompt_start', payload: {} }]);
+    const unknown = feed([{ state: 'ui_prompt_start', payload: { kind: 'voice' } }]);
+    expect(derive(missing).phase).toBe('waiting-human');
+    expect(derive(unknown).phase).toBe('waiting-human');
+  });
+
+  it('ui_prompt_start 被 ui_prompt_end 闭合后解除阻塞（回到 idle）', () => {
     const record = feed([
       { state: 'ui_prompt_start', payload: { kind: 'input' } },
       { state: 'ui_prompt_end', payload: { kind: 'input' } },
     ]);
-    expect(derive(record).phase).not.toBe('waiting-human');
+    const status = derive(record);
+    expect(status.phase).toBe('idle');
+    expect(status.health.attention).toHaveLength(0);
   });
 
   it('tool_execution_start 未闭合 → tool；按 toolCallId 配对闭合', () => {

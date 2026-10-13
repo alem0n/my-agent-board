@@ -146,6 +146,7 @@ const SCRIPT = `
   var HEALTH_LABEL = { good: '良好', watch: '观察', attention: '需处理', unknown: '无数据' };
   var PHASE_LABEL = {
     offline: '离线',
+    'awaiting-input': '等待输入',
     'waiting-human': '等待人工',
     tool: '工具执行中',
     compacting: '压缩中',

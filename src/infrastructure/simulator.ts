@@ -297,6 +297,8 @@ export function runAgentSimulation(deps: SimulationDeps): string[] {
   // --- UI 阻塞提问 ---------------------------------------------------------------
   emit('ui_prompt_start', { type: 'ui_prompt_start', kind: 'confirm', title: '允许执行该命令？' });
   emit('ui_prompt_end', { type: 'ui_prompt_end', kind: 'confirm', title: '允许执行该命令？' });
+  emit('ui_prompt_start', { type: 'ui_prompt_start', kind: 'input', title: '输入提交信息' });
+  emit('ui_prompt_end', { type: 'ui_prompt_end', kind: 'input', title: '输入提交信息' });
 
   // --- 会话树导航与分叉 ------------------------------------------------------------
   emit('session_before_tree', {

@@ -8,9 +8,17 @@
  * - 派生的计算逻辑在 derivation.ts；注册表模型在 registry-model.ts。
  */
 
-/** 运行相位（A1）。优先级：离线 > 等待人工 > 工具执行 > 压缩 > 流式 > 活动 > 空闲。 */
+/** 运行相位（A1）。优先级：离线 > 等待输入 > 等待人工 > 工具执行 > 压缩 > 流式 > 活动 > 空闲。
+ *  等待输入/等待人工同为 UI 提示阻塞，按用户操作形态拆分（键入 vs 选择/确认）。 */
 export type AgentPhase =
-  'offline' | 'waiting-human' | 'tool' | 'compacting' | 'streaming' | 'active' | 'idle';
+  | 'offline'
+  | 'awaiting-input'
+  | 'waiting-human'
+  | 'tool'
+  | 'compacting'
+  | 'streaming'
+  | 'active'
+  | 'idle';
 
 /** 健康级别（A3）。unknown = 离线且无错误信号，不评级。 */
 export type HealthLevel = 'good' | 'watch' | 'attention' | 'unknown';
