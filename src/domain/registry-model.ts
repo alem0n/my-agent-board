@@ -6,6 +6,8 @@
  * 设计文档：docs/DESIGN.md §5、§8。
  */
 
+import type { AgentPhase, DerivedHealth, RunSummary } from './derived-status.js';
+
 /** 历史条目：状态上报或身份变化。 */
 export type HistoryEntry =
   | { kind: 'report'; timestamp: number; state: string; payload: unknown }
@@ -28,6 +30,8 @@ export interface AgentRecord {
   lastHeartbeat: number;
   reportCount: number;
   protocolVersion: string;
+  /** 最近一次上报的状态标识（ingest 时增量写入）。 */
+  lastState: string | null;
   /** 逐状态最新载荷。 */
   latest: Record<string, { timestamp: number; payload: unknown }>;
   /** 上限历史（环形截断）。 */
@@ -48,8 +52,14 @@ export interface AgentSummary {
   stateCount: number;
   /** 派生在线状态（基于 lastSeen 与 lastHeartbeat，REQ-013）。 */
   online: boolean;
-  /** 最后上报的状态标识（latest 中时间戳最大者；无上报时为 null）。 */
+  /** 最后上报的状态标识（ingest 时增量写入，见 AgentRecord.lastState；无上报时为 null）。 */
   lastState: string | null;
+  /** 派生运行相位（BOARD.md A1）。 */
+  phase: AgentPhase;
+  /** 派生健康度与注意项（BOARD.md A2/A3）。 */
+  health: DerivedHealth;
+  /** 最近一次 run 摘要（BOARD.md A4）。 */
+  run: RunSummary;
 }
 
 export interface HistoryQuery {

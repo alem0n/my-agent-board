@@ -259,6 +259,35 @@ describe('loadServerConfig（server 参数解析）', () => {
     expect(loadServerConfig(['node', 's']).webUi).toBe(false);
   });
 
+  it('非法值生成回退告警；--log-level 显式提供标记为 provided', () => {
+    const clean = loadServerConfig(['node', 's', '--port=8099']);
+    expect(clean.warnings).toEqual([]);
+    expect(clean.logLevelProvided).toBe(false);
+
+    const explicit = loadServerConfig(['node', 's', '--log-level=warn']);
+    expect(explicit.logLevel).toBe('warn');
+    expect(explicit.logLevelProvided).toBe(true);
+    expect(explicit.warnings).toEqual([]);
+
+    const bad = loadServerConfig([
+      'node',
+      's',
+      '--port=99999',
+      '--host=',
+      '--log-level=chatty',
+      '--web=maybe',
+    ]);
+    expect(bad.warnings).toHaveLength(4);
+    expect(bad.warnings.some((w) => w.includes("--port '99999'"))).toBe(true);
+    expect(bad.warnings.some((w) => w.includes("--host ''"))).toBe(true);
+    expect(bad.warnings.some((w) => w.includes("--log-level 'chatty'"))).toBe(true);
+    expect(bad.warnings.some((w) => w.includes("--web 'maybe'"))).toBe(true);
+    // 显式但非法：logLevelProvided 为 true（值回落默认，入口日志会告警）
+    expect(bad.logLevelProvided).toBe(true);
+    expect(bad.logLevel).toBe('info');
+    expect(bad.webUi).toBe(false);
+  });
+
   it('不再包含 dataDir（注册表纯内存，--data-dir 被忽略）', () => {
     const conf = loadServerConfig(['node', 's', '--port=1']);
     expect('dataDir' in conf).toBe(false);

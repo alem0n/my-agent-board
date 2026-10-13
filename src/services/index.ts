@@ -16,6 +16,6 @@ export { MAX_BATCH } from './reporter.js';
 export { AgentRegistry } from './registry.js';
 export type { RegistryOptions, IngestResult } from './registry.js';
 export { mapEvent, buildSnapshotPayload, EVENT_STATES } from './mapper.js';
-export type { EventStateId } from './mapper.js';
+export type { EventStateId, TransportSnapshot } from './mapper.js';
 export { computeBackoffDelay, retryWithBackoff } from './retry.js';
 export type { RetryOutcome } from './retry.js';

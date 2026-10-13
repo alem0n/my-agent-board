@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AgentRegistry } from '../src/services/registry.js';
@@ -287,6 +288,27 @@ describe('端到端：server 端契约校验与错误码', () => {
     expect(body.assigned).toBe(false);
   });
 
+  it('详情响应不含 history 字段（职责分离：历史走 /history 端点），并携带派生状态', async () => {
+    const sent = await postJson('/v1/report', buildEnvelope('agent_settled', {}));
+    expect(sent.status).toBe(200);
+    const uuid = (sent.body as { uuid: string }).uuid;
+    const detail = await getJson(`/v1/agents/${uuid}`);
+    expect(detail.status).toBe(200);
+    const body = detail.body as Record<string, unknown>;
+    expect('history' in body).toBe(false);
+    expect(body['latest']).toBeDefined();
+    expect((body['latest'] as Record<string, unknown>)['agent_settled']).toBeDefined();
+    // 派生状态块（BOARD.md A1-A4）
+    const status = body['status'] as Record<string, unknown>;
+    expect(status).toBeDefined();
+    expect(status['phase']).toBe('idle');
+    expect((status['health'] as Record<string, unknown>)['level']).toBe('good');
+    expect(status['run']).toBeDefined();
+    const history = await getJson(`/v1/agents/${uuid}/history?state=agent_settled`);
+    expect(history.status).toBe(200);
+    expect((history.body as { entries: unknown[] }).entries).toHaveLength(1);
+  });
+
   it('未知 agent 查询返回 404 + E_NOT_FOUND', async () => {
     const result = await getJson('/v1/agents/00000000-0000-0000-0000-000000000000');
     expect(result.status).toBe(404);
@@ -298,6 +320,41 @@ describe('端到端：server 端契约校验与错误码', () => {
     expect(notFound.status).toBe(404);
     const method = await fetch(`${baseUrl}/v1/agents`, { method: 'DELETE' });
     expect(method.status).toBe(405);
+  });
+
+  it('原型链路径名（/constructor 等）返回 404，不得 500', async () => {
+    // STATIC_ROUTES 曾用普通对象：path 命中 Object.prototype 属性名时取到继承值，
+    // allowed.includes 抛 TypeError → 500。回归保护。
+    for (const p of ['/constructor', '/toString', '/valueOf', '/__proto__', '/hasOwnProperty']) {
+      const res = await fetch(`${baseUrl}${p}`);
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('E_NOT_FOUND');
+    }
+  });
+
+  it('非法百分编码的 uuid 路径返回 404，不得 500', async () => {
+    // decodeURIComponent('%zz') 抛 URIError：路由此前被外层 catch 转为 500。回归保护。
+    const res = await getJson('/v1/agents/abc%zz');
+    expect(res.status).toBe(404);
+    expect((res.body as { error: { code: string } }).error.code).toBe('E_NOT_FOUND');
+  });
+
+  it('客户端中途中断请求不产生未处理 rejection，server 仍可响应', async () => {
+    // 写一半 body 即断开：server 侧 readBody/响应写入进入防御性路径。
+    // 若任何处理 reject 成 unhandled rejection，本测试文件的 worker 会失败。
+    const big = 'x'.repeat(1024 * 1024);
+    const req = http.request(`${baseUrl}/v1/report`, {
+      method: 'POST',
+      headers: { 'content-length': String(big.length + 2) },
+    });
+    // 客户端主动断开会触发自身 socket 的 ECONNRESET：挂 error 处理器吞掉，
+    // 保持本测试只观察 server 侧行为。
+    req.on('error', () => undefined);
+    req.write(big);
+    req.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const health = await fetch(`${baseUrl}/v1/health`);
+    expect(health.ok).toBe(true);
   });
 
   it('DELETE /v1/agents/:uuid 删除条目（请求即授权，无本地研判）；不存在返回 404', async () => {

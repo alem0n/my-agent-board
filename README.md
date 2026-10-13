@@ -75,7 +75,7 @@ Web UI 为**开关参数、默认关闭**：你需要可视化时加 `--web`（�
 | ---- | ----------------------------------------------- | ------------------------------------- |
 | GET  | `/v1/health`                                    | 健康检查（状态、协议版本、agent 数）  |
 | GET  | `/v1/agents`                                    | agent 列表摘要                        |
-| GET  | `/v1/agents/:uuid`                              | 单 agent 注册记录 + 逐状态最新载荷    |
+| GET  | `/v1/agents/:uuid`                              | 单 agent 注册记录（不含 history）+ 逐状态最新载荷    |
 | GET  | `/v1/agents/:uuid/history?state=&limit=&since=` | 历史记录                              |
 | POST | `/v1/report`                                    | 单信封上报                            |
 | POST | `/v1/report/batch`                              | 批量上报（原子批，上限 512 条 / 4MB） |
@@ -268,6 +268,7 @@ pnpm pack:client      # 生成 build/client/（15 个模块、零运行时依赖
 | [docs/SPEC.md](docs/SPEC.md)             | 意图与需求原子清单                                                               |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md)       | 运行、安装、测试、部署与排障                                                     |
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | 验收门槛逐条对照表与证据                                                         |
+| [docs/BOARD.md](docs/BOARD.md)           | 看板派生层：缺口分析、符号化健康度、注意队列、实施路线（P0-P3 全部交付）        |
 | [CHANGELOG.md](CHANGELOG.md)             | 版本变更记录                                                                     |
 
 ## 许可

@@ -98,13 +98,29 @@ describe('映射器边界（字段缺失与畸形输入）', () => {
 
   it('before_agent_start：prompt/images 缺省时长度为 0', () => {
     const payload = mapEvent('before_agent_start', {}, env())!;
-    expect(payload).toEqual({ promptLength: 0, imageCount: 0, systemPromptLength: 0 });
+    expect(payload).toEqual({
+      promptLength: 0,
+      imageCount: 0,
+      systemPromptLength: 0,
+      messageType: 'user',
+    });
+    const custom = mapEvent(
+      'before_agent_start',
+      { prompt: 'x', images: [], systemPrompt: 'yx', messageType: 'custom' },
+      env(),
+    )!;
+    expect(custom['messageType']).toBe('custom');
     const withImages = mapEvent(
       'before_agent_start',
       { prompt: 'x', images: [{ type: 'image' }, { type: 'image' }], systemPrompt: 'yx' },
       env(),
     )!;
-    expect(withImages).toEqual({ promptLength: 1, imageCount: 2, systemPromptLength: 2 });
+    expect(withImages).toEqual({
+      promptLength: 1,
+      imageCount: 2,
+      systemPromptLength: 2,
+      messageType: 'user',
+    });
   });
 
   it('message_update：assistantMessageEvent 无 type 时 eventType 缺省', () => {
@@ -131,6 +147,21 @@ describe('映射器边界（字段缺失与畸形输入）', () => {
     const payload = mapEvent('tool_execution_end', {}, env())!;
     expect(payload).toMatchObject({ contentPartCount: 0 });
     expect('usageTotalTokens' in payload).toBe(false);
+    expect('durationMs' in payload).toBe(false);
+  });
+
+  it('tool_execution_end：durationMs 缺省/非数字/负值/分数的降级（B1）', () => {
+    const base = { toolCallId: 'c', toolName: 'bash', result: { content: [], isError: false } };
+    expect(mapEvent('tool_execution_end', { ...base }, env())!).not.toHaveProperty('durationMs');
+    expect(
+      mapEvent('tool_execution_end', { ...base, durationMs: 'soon' as unknown as number }, env())!,
+    ).not.toHaveProperty('durationMs');
+    expect(mapEvent('tool_execution_end', { ...base, durationMs: -5 }, env())!['durationMs']).toBe(
+      0,
+    );
+    expect(
+      mapEvent('tool_execution_end', { ...base, durationMs: 340.6 }, env())!['durationMs'],
+    ).toBe(341);
   });
 
   it('tool_execution_update：partialResult 为 undefined 时 hasPartialResult false', () => {

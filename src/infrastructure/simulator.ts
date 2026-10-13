@@ -132,6 +132,7 @@ export function runAgentSimulation(deps: SimulationDeps): string[] {
     prompt: '请总结当前目录的测试覆盖缺口',
     images: [],
     systemPrompt: 'You are Pi, a coding agent harness.' + ' guideline'.repeat(200),
+    messageType: 'user',
   });
   emit('agent_start', { type: 'agent_start' });
   env.update({ isIdle: false });
@@ -176,7 +177,15 @@ export function runAgentSimulation(deps: SimulationDeps): string[] {
     api: 'anthropic-messages',
     provider: 'Intern-anthropic',
     model: 'Atria-Dawn-Preview',
-    usage: { input: 4200, output: 180, cacheRead: 3000, cacheWrite: 1200, totalTokens: 4380 },
+    usage: {
+      input: 4200,
+      output: 180,
+      cacheRead: 3000,
+      cacheWrite: 1200,
+      totalTokens: 4380,
+      cost: { input: 0.0126, output: 0.0027, cacheRead: 0.0003, cacheWrite: 0.0015, total: 0.0171 },
+    },
+    responseModel: 'claude-sonnet-4-5',
     stopReason: 'tool_use',
   };
   emit('message_start', { type: 'message_start', message: assistantMessage });
@@ -224,6 +233,7 @@ export function runAgentSimulation(deps: SimulationDeps): string[] {
     toolName: 'bash',
     result: { content: toolResultContent, isError: false },
     isError: false,
+    durationMs: 340,
   });
 
   // --- 用户直执 bash -----------------------------------------------------------

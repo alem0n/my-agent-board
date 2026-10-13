@@ -1,7 +1,7 @@
 # SPEC — my-agent-board
 
 > 记录项目意图（what/why）与需求原子清单。非平凡变更先在此记录意图。实现产生的新决策必须回写本文件。
-> 完整设计见 [DESIGN.md](./DESIGN.md)；运行与测试见 [RUNBOOK.md](./RUNBOOK.md)；验收对照见 [ACCEPTANCE.md](./ACCEPTANCE.md)。
+> 完整设计见 [DESIGN.md](./DESIGN.md)；运行与测试见 [RUNBOOK.md](./RUNBOOK.md)；验收对照见 [ACCEPTANCE.md](./ACCEPTANCE.md)；看板派生层见 [BOARD.md](./BOARD.md)。
 
 ## 意图
 
@@ -96,6 +96,15 @@
 - 派生状态：`online = now - max(lastSeen, lastHeartbeat) <= 60s`（阈值 = 3 × 默认心跳周期，覆盖网络抖动），经 `/v1/agents` 列表与 `GET /v1/agents/:uuid` 的 `online` 字段暴露；`lastHeartbeat` 一并暴露（0 = 从未心跳）。
 - 心跳为通信探测，不作为监控状态落库（不写 latest、不计 reportCount、不入 history）。
 - client 侧失败不阻塞采集、不进入重试队列（下一周期自然重试）；定时器 `unref()`，不阻止 pi 进程退出。
+
+### REQ-014 看板派生层与符号化健康度
+
+- **意图**：让展板回答三个问题——agent 现在在做什么、哪个需要处理、运行是否良好。当前仅有 `online` 一个派生态，其余需用户从原始事件名反推。
+- **范围**：新增 server 端派生态（运行相位、注意队列、健康度标记、run 摘要）与 Web UI 展示（KPI 条、关注度排序、需处理视图）。
+- **健康度用文本符号（`●`/`◐`/`!`/`—`），不使用颜色**——沿用在线态 `✓`/`✗` 的既有符号约定（色盲友好、零外部资源）。
+- **P0 不改采集层契约**：全部派生只用现有 42 项状态。契约字段升级（`durationMs`/`cost`/`messageType` 等）为 P1 的独立加法式 MINOR 变更。
+- **交付状态**：P0-P3 全部完成。派生层 `src/domain/derivation.ts`（纯函数、单测）；P1/P3 契约升级为加法式 MINOR（`before_agent_start`/`message_end`/`tool_execution_end`/`agent_snapshot` → v1.1.0）；B5 传输健康并入 `agent_snapshot.transport`（不上报新状态，REQ-001 的 42 项不变）；响应字段见 DESIGN.md §6.1；Web UI 呈现见 `src/infrastructure/web-ui-asset.ts`。
+- 设计细节与实施路线见 [BOARD.md](./BOARD.md)。
 
 ## 设计决策
 

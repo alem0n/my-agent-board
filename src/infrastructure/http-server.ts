@@ -30,6 +30,17 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_BATCH_REPORTS = 512;
 const MAX_HISTORY_LIMIT = 1000;
 
+/** 静态路径 → 允许方法。agent 动态路由（/v1/agents/:uuid[/history]）单独匹配。
+ *  用 Map 而非对象字面量：避免 path 命中 Object.prototype 属性名（如 /constructor）
+ *  时取到继承值而抛 TypeError（→ 500 而非 404）。 */
+const STATIC_ROUTES: ReadonlyMap<string, ReadonlyArray<string>> = new Map([
+  ['/v1/health', ['GET']],
+  ['/v1/agents', ['GET']],
+  ['/v1/report', ['POST']],
+  ['/v1/report/batch', ['POST']],
+  ['/v1/heartbeat', ['POST']],
+]);
+
 export interface BoardServerOptions {
   host: string;
   port: number;
@@ -63,12 +74,13 @@ export class BoardHttpServer {
     this.port = options.port;
     this.registry = options.registry;
     this.logger = options.logger;
-    this.startedAt = Date.now();
     this.options = {
       now: options.now ?? (() => Date.now()),
       maxReportAgeMs: options.maxReportAgeMs ?? 7 * 24 * 60 * 60 * 1000,
       webUi: options.webUi ?? false,
     };
+    // 与注入的 now 一致（测试可控行运行时长）。
+    this.startedAt = this.options.now();
   }
 
   /** 启动监听。返回实际监听地址（port=0 时为系统分配端口）。 */
@@ -77,7 +89,16 @@ export class BoardHttpServer {
       throw new Error('server already started');
     }
     const server = http.createServer((request, response) => {
-      void this.handleRequest(request, response);
+      // 处理器内部已有 try/catch；此处兜底防御性 catch，避免任何 reject 成为
+      // unhandled rejection（Node 默认终止进程）。
+      void this.handleRequest(request, response).catch((error) => {
+        this.logger.error('server.requestError', { error: String(error) });
+        this.writeJsonSafe(
+          response,
+          500,
+          this.errorBody(ERROR_CODES.INTERNAL, 'internal server error'),
+        );
+      });
     });
     this.server = server;
     await new Promise<void>((resolve, reject) => {
@@ -104,7 +125,7 @@ export class BoardHttpServer {
   }
 
   get uptimeMs(): number {
-    return Date.now() - this.startedAt;
+    return this.options.now() - this.startedAt;
   }
 
   // ---------------------------------------------------------------------------
@@ -120,98 +141,106 @@ export class BoardHttpServer {
       const method = request.method ?? 'GET';
       const path = url.pathname;
 
-      if (this.options.webUi && (path === '/' || path === '/ui') && method === 'GET') {
-        this.writeHtml(response, WEB_UI_HTML);
-        return;
-      }
-      if (path === '/v1/health' && method === 'GET') {
-        this.writeJson(response, 200, this.healthBody());
-        return;
-      }
-      if (path === '/v1/agents' && method === 'GET') {
-        this.writeJson(response, 200, { agents: this.registry.list(this.options.now()) });
-        return;
-      }
-      if (path === '/v1/report' && method === 'POST') {
-        const result = await this.handleSingleReport(request);
-        this.writeJson(response, result.status, result.body);
-        return;
-      }
-      if (path === '/v1/report/batch' && method === 'POST') {
-        const result = await this.handleBatchReport(request);
-        this.writeJson(response, result.status, result.body);
-        return;
-      }
-      if (path === '/v1/heartbeat' && method === 'POST') {
-        const result = await this.handleHeartbeat(request);
-        this.writeJson(response, result.status, result.body);
-        return;
-      }
-      const agentMatch = /^\/v1\/agents\/([^/]+)$/.exec(path);
-      if (agentMatch !== null && method === 'GET') {
-        const result = this.agentRecord(decodeURIComponent(agentMatch[1] ?? ''));
-        this.writeJson(response, result.status, result.body);
-        return;
-      }
-      if (agentMatch !== null && method === 'DELETE') {
-        const uuid = decodeURIComponent(agentMatch[1] ?? '');
-        const deleted = this.registry.delete(uuid);
-        if (!deleted) {
-          this.writeJson(
-            response,
-            404,
-            this.errorBody(ERROR_CODES.NOT_FOUND, `agent ${uuid} not found`),
-          );
+      if (this.options.webUi && (path === '/' || path === '/ui')) {
+        if (method === 'GET') {
+          this.writeHtml(response, WEB_UI_HTML);
           return;
         }
-        this.writeJson(response, 200, { uuid, deleted: true });
-        return;
-      }
-      const historyMatch = /^\/v1\/agents\/([^/]+)\/history$/.exec(path);
-      if (historyMatch !== null && method === 'GET') {
-        const result = this.agentHistory(decodeURIComponent(historyMatch[1] ?? ''), url);
-        this.writeJson(response, result.status, result.body);
+        this.methodNotAllowed(response, method, path);
         return;
       }
 
-      const agentSubPath = /^\/v1\/agents\/[^/]+(\/history)?$/.test(path);
-      const knownPath =
-        (this.options.webUi && (path === '/' || path === '/ui')) ||
-        path === '/v1/health' ||
-        path === '/v1/agents' ||
-        path === '/v1/report' ||
-        path === '/v1/report/batch' ||
-        path === '/v1/heartbeat' ||
-        agentSubPath;
-      const deleteOnAgent =
-        method === 'DELETE' && /^\/v1\/agents\/[^/]+$/.test(path) && !path.endsWith('/history');
-      // 方法级允许表：/v1/heartbeat 仅允许 POST（其 GET 无处理器 → 405 而非 404）
-      const methodAllowed =
-        (method === 'GET' &&
-          ((this.options.webUi && (path === '/' || path === '/ui')) ||
-            path === '/v1/health' ||
-            path === '/v1/agents' ||
-            agentSubPath)) ||
-        (method === 'POST' &&
-          (path === '/v1/report' || path === '/v1/report/batch' || path === '/v1/heartbeat')) ||
-        deleteOnAgent;
-      if (knownPath && !methodAllowed) {
+      // agent 动态路由：/v1/agents/:uuid 与 /v1/agents/:uuid/history 单次匹配。
+      const agentRoute = /^\/v1\/agents\/([^/]+)(\/history)?$/.exec(path);
+      if (agentRoute !== null) {
+        const uuid = decodeRouteUuid(agentRoute[1] ?? '');
+        if (uuid === undefined) {
+          this.writeJson(
+            response,
+            404,
+            this.errorBody(ERROR_CODES.NOT_FOUND, `no route for ${method} ${path}`),
+          );
+          return;
+        }
+        const isHistory = agentRoute[2] === '/history';
+        if (method === 'GET') {
+          const result = isHistory ? this.agentHistory(uuid, url) : this.agentRecord(uuid);
+          this.writeJson(response, result.status, result.body);
+          return;
+        }
+        if (method === 'DELETE' && !isHistory) {
+          const deleted = this.registry.delete(uuid);
+          if (!deleted) {
+            this.writeJson(
+              response,
+              404,
+              this.errorBody(ERROR_CODES.NOT_FOUND, `agent ${uuid} not found`),
+            );
+            return;
+          }
+          this.writeJson(response, 200, { uuid, deleted: true });
+          return;
+        }
+        // /history 为只读资源：DELETE 与其他方法 → 405。
+        this.methodNotAllowed(response, method, path);
+        return;
+      }
+
+      // 静态路由：路径已知 → 方法不匹配为 405；路径未知 → 404。
+      const allowed = STATIC_ROUTES.get(path);
+      if (allowed === undefined) {
         this.writeJson(
           response,
-          405,
-          this.errorBody(ERROR_CODES.METHOD_NOT_ALLOWED, `method ${method} not allowed on ${path}`),
+          404,
+          this.errorBody(ERROR_CODES.NOT_FOUND, `no route for ${method} ${path}`),
         );
         return;
       }
-      this.writeJson(
-        response,
-        404,
-        this.errorBody(ERROR_CODES.NOT_FOUND, `no route for ${method} ${path}`),
-      );
+      if (!allowed.includes(method)) {
+        this.methodNotAllowed(response, method, path);
+        return;
+      }
+
+      switch (path) {
+        case '/v1/health':
+          this.writeJson(response, 200, this.healthBody());
+          return;
+        case '/v1/agents':
+          this.writeJson(response, 200, { agents: this.registry.list(this.options.now()) });
+          return;
+        case '/v1/report': {
+          const result = await this.handleSingleReport(request);
+          this.writeJson(response, result.status, result.body);
+          return;
+        }
+        case '/v1/report/batch': {
+          const result = await this.handleBatchReport(request);
+          this.writeJson(response, result.status, result.body);
+          return;
+        }
+        case '/v1/heartbeat': {
+          const result = await this.handleHeartbeat(request);
+          this.writeJson(response, result.status, result.body);
+          return;
+        }
+      }
     } catch (error) {
       this.logger.error('server.requestError', { error: String(error) });
-      this.writeJson(response, 500, this.errorBody(ERROR_CODES.INTERNAL, 'internal server error'));
+      // 响应可能已被销毁（客户端断连）：防御性写入不传播错误。
+      this.writeJsonSafe(
+        response,
+        500,
+        this.errorBody(ERROR_CODES.INTERNAL, 'internal server error'),
+      );
     }
+  }
+
+  private methodNotAllowed(response: http.ServerResponse, method: string, path: string): void {
+    this.writeJson(
+      response,
+      405,
+      this.errorBody(ERROR_CODES.METHOD_NOT_ALLOWED, `method ${method} not allowed on ${path}`),
+    );
   }
 
   private writeHtml(response: http.ServerResponse, body: string): void {
@@ -309,8 +338,11 @@ export class BoardHttpServer {
     // 以请求为信任单位：无 uuid 的信封共用本批首个 uuid（首信封携带则沿用，否则生成一次）。
     // server 不做身份研判（无 sticky）：身份由 client 在后续请求中持续携带该 uuid。
     const firstUuid = valid[0]?.agent.uuid;
-    const requestUuid = firstUuid ?? randomUUID();
-    const assignedByServer = firstUuid === undefined;
+    // 请求级 assigned：本批 uuid 由 server 生成时 client 需采用。stamp 后信封均携带
+    // uuid，逐条 ingest 的 assigned 恒为 false，无需再逐条合并。
+    const assigned = valid.length > 0 && firstUuid === undefined;
+    // 空批量无 uuid 可采用：uuid 为空串。
+    const requestUuid = firstUuid ?? (valid.length > 0 ? randomUUID() : '');
     const stamped = valid.map((envelope) =>
       envelope.agent.uuid === undefined
         ? { ...envelope, agent: { ...envelope.agent, uuid: requestUuid } }
@@ -318,16 +350,12 @@ export class BoardHttpServer {
     );
 
     let uuid = '';
-    // 请求级 assigned：本批 uuid 由 server 生成时 client 需采用（stamp 后信封均携带 uuid，逐条 ingest 不再为 true）。
-    // 空批量无 uuid 可采用：assigned=false（client 解析层要求 uuid 非空）。
-    let assigned = valid.length > 0 && assignedByServer;
     let accepted = 0;
     for (const envelope of stamped) {
       const ingest = this.registry.ingest(envelope, this.options.now());
       if (uuid === '') {
         uuid = ingest.uuid;
       }
-      assigned = assigned || ingest.assigned;
       accepted += 1;
     }
     return {
@@ -351,17 +379,14 @@ export class BoardHttpServer {
   }
 
   private agentRecord(uuid: string): RouteResult {
-    const record = this.registry.get(uuid);
-    if (record === undefined) {
+    const body = this.registry.detail(uuid, this.options.now());
+    if (body === undefined) {
       return {
         status: 404,
         body: this.errorBody(ERROR_CODES.NOT_FOUND, `agent '${uuid}' not found`),
       };
     }
-    return {
-      status: 200,
-      body: { ...record, online: this.registry.isOnline(uuid, this.options.now()) },
-    };
+    return { status: 200, body };
   }
 
   private async handleHeartbeat(request: http.IncomingMessage): Promise<RouteResult> {
@@ -390,13 +415,6 @@ export class BoardHttpServer {
   }
 
   private agentHistory(uuid: string, url: URL): RouteResult {
-    const record = this.registry.get(uuid);
-    if (record === undefined) {
-      return {
-        status: 404,
-        body: this.errorBody(ERROR_CODES.NOT_FOUND, `agent '${uuid}' not found`),
-      };
-    }
     const stateParam = url.searchParams.get('state') ?? undefined;
     const limitParam = url.searchParams.get('limit');
     const sinceParam = url.searchParams.get('since');
@@ -479,11 +497,29 @@ export class BoardHttpServer {
     });
     response.end(payload);
   }
+
+  /** 防御性写入：响应可能已销毁（客户端断连），失败仅记录不传播。 */
+  private writeJsonSafe(response: http.ServerResponse, status: number, body: unknown): void {
+    try {
+      this.writeJson(response, status, body);
+    } catch (error) {
+      this.logger.error('server.writeError', { error: String(error) });
+    }
+  }
 }
 
 interface MappedValidation {
   code: string;
   message: string;
+}
+
+/** 解码路径段中的 uuid；非法百分编码返回 undefined（路由层判 404，不当 500）。 */
+function decodeRouteUuid(raw: string): string | undefined {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 /** 将字段级校验错误映射为协议层错误码（docs/DESIGN.md §6.2）。 */

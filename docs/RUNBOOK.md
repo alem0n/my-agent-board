@@ -1,6 +1,6 @@
 # RUNBOOK — my-agent-board 运行与测试说明
 
-> 交付物③。设计见 [DESIGN.md](./DESIGN.md)，需求见 [SPEC.md](./SPEC.md)，验收结果见 [ACCEPTANCE.md](./ACCEPTANCE.md)。
+> 交付物③。设计见 [DESIGN.md](./DESIGN.md)，需求见 [SPEC.md](./SPEC.md)，验收结果见 [ACCEPTANCE.md](./ACCEPTANCE.md)，看板派生层见 [BOARD.md](./BOARD.md)。
 
 ## 1. 环境要求
 
@@ -107,7 +107,7 @@ Web UI 于 `GET /` 与 `/ui`：agent 列表（uuid/name/cwd/lastSeen/状态数/�
 | GET | `/` / `/ui` | 内置 Web UI（仅 `--web` 启用时；默认 404） |
 | GET | `/v1/health` | 健康检查（含协议版本、agent 数、运行时长） |
 | GET | `/v1/agents` | agent 列表摘要 |
-| GET | `/v1/agents/:uuid` | 单 agent 注册记录 + 逐状态最新载荷 |
+| GET | `/v1/agents/:uuid` | 单 agent 注册记录（不含 history）+ 逐状态最新载荷 |
 | GET | `/v1/agents/:uuid/history?state=&limit=&since=` | 历史记录 |
 | POST | `/v1/report` | 单信封上报 |
 | POST | `/v1/report/batch` | 批量上报（原子批，≤512 条 / 4MB） |

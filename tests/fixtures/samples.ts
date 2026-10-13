@@ -47,7 +47,12 @@ export const VALID_SAMPLES: Record<string, Record<string, unknown>> = {
     model: 'claude-x',
     eventType: 'text',
   },
-  before_agent_start: { promptLength: 128, imageCount: 0, systemPromptLength: 4096 },
+  before_agent_start: {
+    promptLength: 128,
+    imageCount: 0,
+    systemPromptLength: 4096,
+    messageType: 'user',
+  },
   agent_start: {},
   agent_end: { messageCount: 12, roleCounts: { system: 0, user: 4, assistant: 4, toolResult: 4 } },
   agent_before_settle: { outcome: 'completed', entryCount: 42, willContinue: false },
@@ -68,8 +73,16 @@ export const VALID_SAMPLES: Record<string, Record<string, unknown>> = {
     contentPartCount: 1,
     provider: 'anthropic',
     model: 'claude-x',
+    responseModel: 'claude-x-2',
     stopReason: 'tool_use',
-    usage: { input: 4200, output: 180, cacheRead: 3000, cacheWrite: 1200, totalTokens: 4380 },
+    usage: {
+      input: 4200,
+      output: 180,
+      cacheRead: 3000,
+      cacheWrite: 1200,
+      totalTokens: 4380,
+      cost: { input: 0.0126, output: 0.0027, cacheRead: 0.0003, cacheWrite: 0.0015, total: 0.0171 },
+    },
   },
   tool_execution_start: {
     toolCallId: 'call_1',
@@ -82,6 +95,7 @@ export const VALID_SAMPLES: Record<string, Record<string, unknown>> = {
     toolName: 'bash',
     isError: false,
     contentPartCount: 1,
+    durationMs: 340,
     usageTotalTokens: 100,
   },
   model_select: { model: 'anthropic/claude-x', previousModel: 'openai/gpt-5', source: 'set' },
@@ -109,6 +123,13 @@ export const VALID_SAMPLES: Record<string, Record<string, unknown>> = {
     model: 'anthropic/claude-x',
     thinkingLevel: 'high',
     contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+    transport: {
+      dropped: 0,
+      droppedRejected: 0,
+      flushFailures: 2,
+      unreachable: false,
+      unreachableSince: null,
+    },
     activeToolCount: 5,
     piVersion: '1.0.4',
     uptimeMs: 12345,
@@ -120,7 +141,11 @@ export const ENV_FIELDS = {
   sessionId: 'sess-0001',
 };
 
-/** 构造合法信封。 */
+/** 构造合法信封。
+ *
+ * 默认时间戳取调用时的实时时钟：server 端校验以真实 now 为准（±60s/7 天窗口），
+ * 固定历史时间戳会让 e2e 契约随运行日期失效（P2-13）。需要固定时间的测试显式传
+ * overrides.timestamp。 */
 export function buildEnvelope(
   state: string,
   payload: Record<string, unknown>,
@@ -129,7 +154,7 @@ export function buildEnvelope(
   return {
     protocolVersion: '1',
     state,
-    timestamp: 1791800000000,
+    timestamp: Date.now(),
     agent: { name: 'agent-a', cwd: '/home/user/proj', sessionId: 'sess-0001' },
     payload,
     ...overrides,

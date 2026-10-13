@@ -25,7 +25,7 @@ import type { PersistedIdentity } from '../domain/identity.js';
 import { resolveIdentity } from '../domain/identity.js';
 import { BatchTooLargeError } from '../domain/errors.js';
 import { computeBackoffDelay, retryWithBackoff } from './retry.js';
-import { EVENT_STATES, buildSnapshotPayload, mapEvent } from './mapper.js';
+import { EVENT_STATES, buildSnapshotPayload, mapEvent, type TransportSnapshot } from './mapper.js';
 
 export const MAX_BATCH = 512;
 const SHUTDOWN_FLUSH_TIMEOUT_MS = 3_000;
@@ -72,6 +72,8 @@ export class Reporter {
   private recoveryInFlight = false;
   /** 恢复探测退避睡眠的唤醒句柄（stop 时清除，避免退出挂起）。 */
   private recoveryWaiters: Array<() => void> = [];
+  /** 最近一次不可达成起始时间（恢复后清空）。 */
+  private unreachableSince: number | null = null;
   /** 413 拆分后的批次大小上限（成功后重置为 MAX_BATCH）。 */
   private batchSizeLimit = MAX_BATCH;
   private unsubscribers: (() => void)[] = [];
@@ -113,6 +115,7 @@ export class Reporter {
     this.running = true;
     // 重置关闭后残留状态（stop→start 重启场景）：上轮不可达、进行中批次、拆半限频不带入新会话。
     this.reachable = true;
+    this.unreachableSince = null;
     this.flushInFlight = null;
     this.batchSizeLimit = MAX_BATCH;
     this.deps.logger.info('reporter.start', {
@@ -245,14 +248,25 @@ export class Reporter {
     this.enqueue(state, mapped, this.now());
   }
 
-  /** 采样型状态采集：agent_snapshot。 */
+  /** 采样型状态采集：agent_snapshot（含 client 传输健康，B5）。 */
   collectSnapshot(): void {
     if (!this.running) {
       return;
     }
     const env = this.deps.env.snapshot();
-    const payload = buildSnapshotPayload(env, this.now());
+    const payload = buildSnapshotPayload(env, this.now(), this.transportSnapshot());
     this.enqueue('agent_snapshot', payload, this.now());
+  }
+
+  /** 传输健康快照：累计丢弃/拒绝/失败计数 + 不可达成因时间。 */
+  private transportSnapshot(): TransportSnapshot {
+    return {
+      dropped: this.stats.dropped,
+      droppedRejected: this.stats.droppedRejected,
+      flushFailures: this.stats.flushFailures,
+      unreachable: !this.reachable,
+      unreachableSince: this.unreachableSince,
+    };
   }
 
   /** 组信封并入队（含高频状态合并与超限溢出）。 */
@@ -484,6 +498,7 @@ export class Reporter {
       return;
     }
     this.reachable = false;
+    this.unreachableSince = this.now();
     this.deps.logger.error('transport.unreachable', { serverUrl: this.deps.config.serverUrl });
     void this.runRecovery().catch((error) => {
       this.deps.logger.error('recovery.unexpectedError', { error: String(error) });
@@ -508,6 +523,7 @@ export class Reporter {
           const healthy = await this.deps.transport.health();
           if (healthy) {
             this.reachable = true;
+            this.unreachableSince = null;
             this.stats.recoveryCount += 1;
             this.deps.logger.info('transport.recovered', {
               attempt,

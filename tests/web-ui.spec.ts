@@ -93,7 +93,7 @@ describe('Web UI 挂载契约', () => {
     expect(head.startsWith('<th title="在线状态')).toBe(true);
     expect(
       head.startsWith(
-        '<th title="在线状态（REQ-013：近 60s 有上报或心跳）">在线</th><th>状态</th>',
+        '<th title="在线状态（REQ-013：近 60s 有上报或心跳）">在线</th><th title="健康度（BOARD.md A3：● 良好 / ◐ 观察 / ! 需处理 / — 无数据）">健康</th><th title="运行相位（A1）">相位</th><th>状态</th>',
       ),
     ).toBe(true);
     expect(head.endsWith('<th>uuid</th>')).toBe(true);
@@ -101,6 +101,24 @@ describe('Web UI 挂载契约', () => {
     expect(WEB_UI_HTML).toContain("(a.online ? '✓' : '✗')");
     expect(WEB_UI_HTML).not.toContain('dot-on');
     expect(WEB_UI_HTML).not.toContain('dot-off');
+    // 健康度同样以符号呈现（A3）：●/◐/!/—，不用颜色
+    expect(WEB_UI_HTML).toContain(
+      "var HEALTH_SYMBOL = { good: '●', watch: '◐', attention: '!', unknown: '—' };",
+    );
+    // 相位标签（A1）
+    expect(WEB_UI_HTML).toContain("'waiting-human': '等待人工'");
+    expect(WEB_UI_HTML).toContain("streaming: '流式输出中'");
+    // KPI 条容器（C1）
+    expect(WEB_UI_HTML).toContain('<div class="kpis" id="kpis"></div>');
+    expect(WEB_UI_HTML).toContain("kpi('!', '需处理', c.attention)");
+    // 关注度排序（C2）：需处理 → 观察 → 良好 → 无数据，同档 lastSeen 倒序
+    expect(WEB_UI_HTML).toContain('attentionRank(a) - attentionRank(b) || b.lastSeen - a.lastSeen');
+    // 详情面板的派生状态块：相位/健康/run 摘要/注意项
+    expect(WEB_UI_HTML).toContain('\'<h2 style="margin-top:20px">运行状态</h2>\'');
+    expect(WEB_UI_HTML).toContain('esc(runLine(s.run))');
+    // 详情块的健康提示读 status.health（详情响应无顶层 health 字段）
+    expect(WEB_UI_HTML).toContain('healthTitle({ health: s.health })');
+    expect(WEB_UI_HTML).toContain('<ul class="attention">');
     // 状态列渲染最后上报事件的中文标签
     expect(WEB_UI_HTML).toContain('stateLabel(a.lastState)');
     // 中文标签表覆盖 42 项状态（抽样校验中英文映射存在）
@@ -111,6 +129,8 @@ describe('Web UI 挂载契约', () => {
     expect(WEB_UI_HTML).toContain("var limitEl = document.getElementById('historyLimit');");
     expect(WEB_UI_HTML).toContain("var filterEl = document.getElementById('stateFilter');");
     expect(WEB_UI_HTML).toContain("' + esc(a.uuid) + '</span></td>'");
+    // 空表占位与新列数一致（10 列）
+    expect(WEB_UI_HTML).toContain('colspan="10"');
   });
 
   it('内联 <script> 语法可解析（CSS 误插进 SCRIPT 的 P0 回归防护）', () => {
@@ -133,6 +153,24 @@ describe('Web UI 挂载契约', () => {
     expect(WEB_UI_HTML).toContain('bindToolbar();');
   });
 
+  it('详情页历史区为事件时间线 + 趋势图（C3/C4，替代原始 JSON 表）', () => {
+    // 时间线：逐条摘要 + 全量悬停，最新在上
+    expect(WEB_UI_HTML).toContain('function entrySummary');
+    expect(WEB_UI_HTML).toContain('function clockTime');
+    expect(WEB_UI_HTML).toContain('class="tl"');
+    expect(WEB_UI_HTML).toContain('事件时间线（最近 ');
+    expect(WEB_UI_HTML).not.toContain('历史（最近 ');
+    // 趋势：内联 SVG 迷你线，零外部资源
+    expect(WEB_UI_HTML).toContain('function computeTrends');
+    expect(WEB_UI_HTML).toContain('function sparkline');
+    expect(WEB_UI_HTML).toContain('<polyline');
+    expect(WEB_UI_HTML).toContain('消息 token');
+    expect(WEB_UI_HTML).toContain('工具耗时');
+    expect(WEB_UI_HTML).toContain('错误率');
+    // P1 新字段进入时间线摘要
+    expect(WEB_UI_HTML).toContain("p['durationMs'] !== undefined");
+  });
+
   it('UI 页面引用的 API 端点均存在（无悬空 fetch）', async () => {
     const paths = ['/v1/health', '/v1/agents'];
     expect(WEB_UI_HTML).toMatch(/\/v1\/agents/);
@@ -146,5 +184,141 @@ describe('Web UI 挂载契约', () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe('UI 派生状态函数行为（从内联脚本提取执行）', () => {
+  const script = /<script>([\s\S]*)<\/script>/.exec(WEB_UI_HTML)?.[1] ?? '';
+
+  /** 提取单个函数源码并执行（无 DOM 依赖的纯函数）。 */
+  function extractFunction(name: string): string {
+    const re = new RegExp(`function ${name}\\([\\s\\S]*?\\n  \\}`);
+    const body = re.exec(script)?.[0] ?? '';
+    expect(body, `function ${name} not found`).toBeTruthy();
+    return body;
+  }
+
+  it('attentionRank 按级别排队且未知级别兼底为最低档', () => {
+    const rank = new Function(`${extractFunction('attentionRank')}; return attentionRank;`)() as (
+      agent: Record<string, unknown>,
+    ) => number;
+    expect(rank({ health: { level: 'attention' } })).toBe(0);
+    expect(rank({ health: { level: 'watch' } })).toBe(1);
+    expect(rank({ health: { level: 'good' } })).toBe(2);
+    expect(rank({ health: { level: 'unknown' } })).toBe(3);
+    // 无派生数据与对象原型键都不改变排队结果（防御性）
+    expect(rank({})).toBe(3);
+    expect(rank({ health: { level: 'constructor' } })).toBe(3);
+  });
+
+  it('runLine 进行中/完成/无记录三种语义', () => {
+    const runLine = new Function(
+      `${extractFunction('formatDuration')}${extractFunction('runLine')} return runLine;`,
+    )() as (run: Record<string, unknown> | null) => string;
+    expect(runLine({ startedAt: null })).toBe('无 run 记录');
+    expect(runLine(null)).toBe('无 run 记录');
+    const running = runLine({
+      running: true,
+      startedAt: 1000,
+      endedAt: null,
+      durationMs: 90_000,
+      outcome: null,
+      turns: 2,
+      toolCalls: 3,
+      totalTokens: 5000,
+    });
+    expect(running).toContain('进行中');
+    expect(running).toContain('2 轮');
+    expect(running).toContain('3 次工具');
+    expect(running).toContain('5,000 tokens');
+    const done = runLine({
+      running: false,
+      startedAt: 1000,
+      endedAt: 2000,
+      durationMs: 60_000,
+      outcome: 'error',
+      turns: 1,
+      toolCalls: 0,
+      totalTokens: 0,
+    });
+    expect(done).toContain('出错');
+    expect(done).toContain('1m');
+  });
+
+  it('entrySummary 摘要字段不含 payload 全文（隐私 + 可读性）', () => {
+    const entrySummary = new Function(
+      `${extractFunction('entrySummary')} return entrySummary;`,
+    )() as (entry: Record<string, unknown>) => string;
+    expect(
+      entrySummary({
+        kind: 'report',
+        state: 'tool_execution_end',
+        payload: { toolName: 'bash', isError: true, durationMs: 340 },
+      }),
+    ).toBe('bash · 失败 · 340ms');
+    expect(
+      entrySummary({
+        kind: 'report',
+        state: 'message_end',
+        payload: { role: 'assistant', stopReason: 'tool_use' },
+      }),
+    ).toBe('assistant · tool_use');
+    expect(
+      entrySummary({ kind: 'report', state: 'after_provider_response', payload: { status: 429 } }),
+    ).toBe('HTTP 429');
+    // 身份变更条目走 fields 分支
+    expect(
+      entrySummary({
+        kind: 'identity_change',
+        timestamp: 1,
+        fields: { name: { from: 'a', to: 'b' } },
+      }),
+    ).toContain('身份变更');
+    // 未知/空字段不报 undefined
+    expect(entrySummary({ kind: 'report', state: 'agent_start', payload: {} })).toBe('');
+  });
+
+  it('computeTrends 聚合 token/耗时/错误率三序列', () => {
+    const computeTrends = new Function(
+      `${extractFunction('computeTrends')} return computeTrends;`,
+    )() as (entries: Array<Record<string, unknown>>) => {
+      tokens: number[];
+      durations: number[];
+      errPct: number[];
+    };
+    const entries = [
+      { kind: 'report', state: 'message_end', payload: { usage: { totalTokens: 100 } } },
+      { kind: 'report', state: 'message_end', payload: { usage: { totalTokens: 300 } } },
+      { kind: 'report', state: 'tool_execution_end', payload: { durationMs: 120, isError: false } },
+      { kind: 'report', state: 'tool_execution_end', payload: { durationMs: 480, isError: true } },
+      { kind: 'report', state: 'after_provider_response', payload: { status: 200 } },
+      { kind: 'report', state: 'after_provider_response', payload: { status: 500 } },
+    ];
+    const trends = computeTrends(entries);
+    expect(trends.tokens).toEqual([100, 300]);
+    expect(trends.durations).toEqual([120, 480]);
+    expect(trends.errPct.length).toBeGreaterThan(0);
+    // errPct 已为百分数：4 次尝试 2 次失败（工具失败 + 5xx）→ 50
+    const total = trends.errPct.reduce((sum, ratio) => sum + ratio, 0);
+    const count = trends.errPct.length;
+    expect(Math.round(total / count)).toBe(50);
+  });
+
+  it('sparkline 生成内联 SVG，空数据显示无数据，单点仅文本', () => {
+    const sparkline = new Function(`${extractFunction('sparkline')} return sparkline;`)() as (
+      values: number[],
+      label: string,
+      unit: string,
+    ) => string;
+    const empty = sparkline([], '消息 token', '');
+    expect(empty).toContain('无数据');
+    expect(empty).not.toContain('<svg');
+    const single = sparkline([42], '消息 token', '');
+    expect(single).toContain('42');
+    expect(single).not.toContain('<svg');
+    const line = sparkline([1, 5, 2, 8], '工具耗时', 'ms');
+    expect(line).toContain('<svg');
+    expect(line).toContain('<polyline');
+    expect(line).toContain('8ms');
   });
 });

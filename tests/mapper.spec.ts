@@ -50,8 +50,16 @@ describe('映射覆盖（与状态注册表一致）', () => {
     }
   });
 
-  it('agent_snapshot 映射覆盖 EnvironmentContext 全部可采样字段并通过契约', () => {
-    const payload = buildSnapshotPayload(env(), NOW);
+  it('agent_snapshot 映射覆盖 EnvironmentContext 全部可采样字段并通过契约（含传输健康注入）', () => {
+    const payloadWithoutTransport = buildSnapshotPayload(env(), NOW);
+    expect(payloadWithoutTransport['transport']).toBeUndefined();
+    const payload = buildSnapshotPayload(env(), NOW, {
+      dropped: 2,
+      droppedRejected: 1,
+      flushFailures: 3,
+      unreachable: true,
+      unreachableSince: NOW - 5000,
+    });
     const contract = getContract('agent_snapshot');
     const declared = (contract?.payload.fields ?? []).map((field) => field.name).sort();
     expect(declared).toEqual(
@@ -67,6 +75,7 @@ describe('映射覆盖（与状态注册表一致）', () => {
         'model',
         'thinkingLevel',
         'contextUsage',
+        'transport',
         'activeToolCount',
         'piVersion',
         'uptimeMs',
@@ -75,6 +84,23 @@ describe('映射覆盖（与状态注册表一致）', () => {
     const result = validatePayload('agent_snapshot', payload);
     expect(result.ok, JSON.stringify(result.errors)).toBe(true);
     expect(payload['uptimeMs']).toBe(12345);
+    expect(payload['transport']).toEqual({
+      dropped: 2,
+      droppedRejected: 1,
+      flushFailures: 3,
+      unreachable: true,
+      unreachableSince: NOW - 5000,
+    });
+    // 传输统计为负/非法时的钳制
+    const clamped = buildSnapshotPayload(env(), NOW, {
+      dropped: -3,
+      droppedRejected: -1,
+      flushFailures: -2,
+      unreachable: false,
+      unreachableSince: null,
+    });
+    expect(validatePayload('agent_snapshot', clamped).ok).toBe(true);
+    expect((clamped['transport'] as Record<string, unknown>)['dropped']).toBe(0);
   });
 
   it('注册表状态数 = 41 事件 + 1 快照', () => {
@@ -178,7 +204,7 @@ describe('隐私约束（不上报原文内容）', () => {
 });
 
 describe('结构映射正确性', () => {
-  it('message_end 用量字段映射', () => {
+  it('message_end 用量字段映射（含费用）', () => {
     const payload = mapEvent(
       'message_end',
       {
@@ -188,7 +214,21 @@ describe('结构映射正确性', () => {
           content: [],
           provider: 'anthropic',
           model: 'claude-x',
-          usage: { input: 4200, output: 180, cacheRead: 3000, cacheWrite: 1200, totalTokens: 4380 },
+          responseModel: 'claude-x-2',
+          usage: {
+            input: 4200,
+            output: 180,
+            cacheRead: 3000,
+            cacheWrite: 1200,
+            totalTokens: 4380,
+            cost: {
+              input: 0.0126,
+              output: 0.0027,
+              cacheRead: 0.0003,
+              cacheWrite: 0.0015,
+              total: 0.0171,
+            },
+          },
           stopReason: 'tool_use',
         },
       },
@@ -198,9 +238,49 @@ describe('结构映射正确性', () => {
       role: 'assistant',
       provider: 'anthropic',
       model: 'claude-x',
+      responseModel: 'claude-x-2',
       stopReason: 'tool_use',
-      usage: { input: 4200, output: 180, cacheRead: 3000, cacheWrite: 1200, totalTokens: 4380 },
+      usage: {
+        input: 4200,
+        output: 180,
+        cacheRead: 3000,
+        cacheWrite: 1200,
+        totalTokens: 4380,
+        cost: {
+          input: 0.0126,
+          output: 0.0027,
+          cacheRead: 0.0003,
+          cacheWrite: 0.0015,
+          total: 0.0171,
+        },
+      },
     });
+  });
+
+  it('message_end 费用仅在 usage 出现且 cost 合法时携带；usage 缺失时不报 usage', () => {
+    const noUsage = mapEvent(
+      'message_end',
+      { type: 'message_end', message: { role: 'assistant', content: [] } },
+      env(),
+    )!;
+    expect(noUsage['usage']).toBeUndefined();
+
+    const badCost = mapEvent(
+      'message_end',
+      {
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          usage: { totalTokens: 10, cost: { input: -1, total: 0.01 } },
+        },
+      },
+      env(),
+    )!;
+    const usage = badCost['usage'] as Record<string, unknown>;
+    const cost = usage['cost'] as Record<string, number>;
+    expect(cost['total']).toBe(0.01);
+    expect('input' in cost).toBe(false);
   });
 
   it('model_select 拼接 provider/id', () => {

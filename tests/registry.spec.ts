@@ -128,8 +128,22 @@ describe('历史与查询', () => {
       lastState: 'agent_settled',
     });
     expect(list[0]?.firstSeen).toBeLessThanOrEqual(list[0]!.lastSeen);
-    // 无上报的摘要（理论路径）：lastState 为 null
     expect(list[0]?.lastState).not.toBeNull();
+  });
+
+  it('摘要 lastState 在环形截断后仍为最近上报状态（增量记录，不扫 history）', () => {
+    const registry = makeRegistry({ historyLimit: 3 });
+    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
+    for (let i = 0; i < 5; i += 1) {
+      registry.ingest(
+        buildEnvelope('agent_end', {}, { agent: sameAgent(first.uuid) }),
+        NOW + 10 + i,
+      );
+    }
+    const record = registry.get(first.uuid)!;
+    expect(record.history).toHaveLength(3);
+    const list = registry.list();
+    expect(list[0]?.lastState).toBe('agent_end');
   });
 });
 

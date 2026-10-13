@@ -62,7 +62,7 @@ const MANUAL_STATE_LIST = [
   'agent_snapshot',
 ] as const;
 
-const NOW = 1791800000000;
+const NOW = Date.now();
 
 describe('状态注册表覆盖（验收门槛 1）', () => {
   it('注册表恰好包含 42 项状态', () => {
@@ -168,6 +168,26 @@ describe('逐状态契约（验收门槛 2）', () => {
       const mutated = { ...VALID_SAMPLES[state], unknownExtra: 1 };
       expect(validatePayload(state, mutated).ok, state).toBe(false);
     }
+  });
+
+  it('嵌套对象内未知键即拒绝（usage.cost / transport 契约边界）', () => {
+    const messageEnd = VALID_SAMPLES['message_end']! as Record<string, unknown>;
+    const usage = { ...(messageEnd['usage'] as Record<string, unknown>), bogus: 1 };
+    expect(validatePayload('message_end', { ...messageEnd, usage }).ok).toBe(false);
+    const cost = {
+      ...((usage['cost'] as Record<string, unknown>) ?? {}),
+      currency: 'USD',
+    };
+    expect(validatePayload('message_end', { ...messageEnd, usage: { ...usage, cost } }).ok).toBe(
+      false,
+    );
+
+    const snapshot = VALID_SAMPLES['agent_snapshot']! as Record<string, unknown>;
+    const transport = {
+      ...(snapshot['transport'] as Record<string, unknown>),
+      lastError: 'boom',
+    };
+    expect(validatePayload('agent_snapshot', { ...snapshot, transport }).ok).toBe(false);
   });
 
   it('枚举与范围边界：边界值合法、越界非法', () => {

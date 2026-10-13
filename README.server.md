@@ -56,7 +56,7 @@ kill <PID>                          # 或 kill -9 <PID>
 |---|---|---|
 | GET | `/v1/health` | 健康检查（状态、协议版本、agent 数） |
 | GET | `/v1/agents` | agent 列表摘要 |
-| GET | `/v1/agents/:uuid` | 单 agent 注册记录 + 逐状态最新载荷 |
+| GET | `/v1/agents/:uuid` | 单 agent 注册记录（不含 history）+ 逐状态最新载荷 |
 | GET | `/v1/agents/:uuid/history?state=&limit=&since=` | 历史记录 |
 | POST | `/v1/report` | 单信封上报 |
 | POST | `/v1/report/batch` | 批量上报（原子批，上限 512 条 / 4MB） |

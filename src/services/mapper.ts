@@ -303,6 +303,8 @@ const MAPPERS: Record<EventStateId, Mapper> = {
       promptLength: stringLength(e['prompt']),
       imageCount: images === undefined ? 0 : images.length,
       systemPromptLength: stringLength(e['systemPrompt']),
+      // 缺省视为用户发起：pi 区分 "user"（prompt 流）与 "custom"（触发轮的自定义消息）。
+      messageType: e['messageType'] === 'custom' ? 'custom' : 'user',
     };
   },
   agent_start: () => ({}),
@@ -352,18 +354,40 @@ const MAPPERS: Record<EventStateId, Mapper> = {
     const payload = messagePayload(event, { includeIdentity: true, includeOutcome: true });
     const e = asObject(event) ?? {};
     const message = asObject(e['message']) ?? {};
+    const responseModel = stringField(message['responseModel'], 128);
+    const responsePayload = responseModel === undefined ? payload : { ...payload, responseModel };
     const usage = asObject(message['usage']);
     if (usage === undefined) {
-      return payload;
+      return responsePayload;
     }
-    const usagePayload: Record<string, number> = {};
-    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens']) {
+    // usage 的值为 token 数或 cost 对象（任一合法即输出 usage）。
+    const usagePayload: Record<string, number | Record<string, number>> = {};
+    // token 计数的类型固定为 number，直接赋值。
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const) {
       const value = numberField(usage[key]);
       if (value !== undefined) {
         usagePayload[key] = Math.max(0, Math.round(value));
       }
     }
-    return Object.keys(usagePayload).length === 0 ? payload : { ...payload, usage: usagePayload };
+    const cost = asObject(usage['cost']);
+    if (cost !== undefined) {
+      const costPayload: Record<string, number> = {};
+      for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total']) {
+        const value = numberField(cost[key]);
+        if (value !== undefined && value >= 0) {
+          costPayload[key] = value;
+        }
+      }
+      // 费用为小数不取整；cost 成员全非法时不带 cost。
+      if (Object.keys(costPayload).length > 0) {
+        usagePayload['cost'] = costPayload;
+      }
+    }
+    // token 计数与 cost 任一合法即输出 usage（契约允许 usage 仅含 cost）。
+    if (Object.keys(usagePayload).length === 0) {
+      return responsePayload;
+    }
+    return { ...responsePayload, usage: usagePayload };
   },
   tool_execution_start: (event) => {
     const e = asObject(event) ?? {};
@@ -388,11 +412,13 @@ const MAPPERS: Record<EventStateId, Mapper> = {
     const usageTotalTokens = numberField(
       result?.['usage'] !== undefined ? asObject(result['usage'])?.['totalTokens'] : undefined,
     );
+    const durationMs = numberField(e['durationMs']);
     return {
       toolCallId: stringField(e['toolCallId'], 128) ?? '',
       toolName: stringField(e['toolName'], 128) ?? '',
       isError: e['isError'] === true,
       contentPartCount: arrayLength(result?.['content']),
+      ...(durationMs === undefined ? {} : { durationMs: Math.max(0, Math.round(durationMs)) }),
       ...(usageTotalTokens === undefined
         ? {}
         : { usageTotalTokens: Math.max(0, Math.round(usageTotalTokens)) }),
@@ -554,10 +580,28 @@ export function mapEvent(
   return mapper === undefined ? undefined : mapper(event, env);
 }
 
-/** 构建 agent_snapshot 采样载荷（EnvironmentContext 可采样字段全集）。 */
+/** agent_snapshot 携带的 client 传输健康快照（B5：监控链路自身的可观测性）。 */
+export interface TransportSnapshot {
+  /** 缓冲超限丢弃 / 关闭残留累计。 */
+  dropped: number;
+  /** 每信拒绝剔除累计（毒信处理）。 */
+  droppedRejected: number;
+  /** flush 失败累计。 */
+  flushFailures: number;
+  /** 当前不可达（健康探测未恢复）。 */
+  unreachable: boolean;
+  /** 最近一次不可达成起始 epoch ms；恢复后为 null。 */
+  unreachableSince: number | null;
+}
+
+/**
+ * 构建 agent_snapshot 采样载荷（EnvironmentContext 可采样字段全集 + 传输健康）。
+ * transport 由 Reporter 注入（事件源不含链路状态）。
+ */
 export function buildSnapshotPayload(
   env: PiEnvironmentSnapshot,
   now: number,
+  transport?: TransportSnapshot,
 ): Record<string, unknown> {
   const model = env.model === undefined ? undefined : `${env.model.provider}/${env.model.id}`;
   const sessionId = env.sessionId === undefined ? '' : env.sessionId.slice(0, 256);
@@ -582,6 +626,21 @@ export function buildSnapshotPayload(
     ...(model === undefined ? {} : { model }),
     ...(env.thinkingLevel === undefined ? {} : { thinkingLevel: env.thinkingLevel.slice(0, 32) }),
     ...(contextUsage === undefined ? {} : { contextUsage }),
+    ...(transport === undefined
+      ? {}
+      : {
+          transport: {
+            dropped: Math.max(0, Math.round(transport.dropped)),
+            droppedRejected: Math.max(0, Math.round(transport.droppedRejected)),
+            flushFailures: Math.max(0, Math.round(transport.flushFailures)),
+            unreachable: transport.unreachable === true,
+            // 钳制防御：注入的 now() 返回负/非整数时仍守契约（integer ≥0）。
+            unreachableSince:
+              transport.unreachableSince === null || transport.unreachableSince === undefined
+                ? null
+                : Math.max(0, Math.round(transport.unreachableSince)),
+          },
+        }),
     activeToolCount: env.activeTools.length,
     ...(env.piVersion === undefined ? {} : { piVersion: env.piVersion.slice(0, 64) }),
     uptimeMs: Math.max(0, Math.round(now - env.startedAt)),

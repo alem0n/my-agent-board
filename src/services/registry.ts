@@ -18,6 +18,7 @@ import type {
   HistoryResult,
   HistoryEntry,
 } from '../domain/registry-model.js';
+import { deriveAgentStatus } from '../domain/derivation.js';
 import type { ReportEnvelope } from '../domain/contracts.js';
 import type { BoardLogger } from '../domain/logging.js';
 
@@ -65,12 +66,14 @@ export class AgentRegistry {
         lastHeartbeat: 0,
         reportCount: 0,
         protocolVersion: envelope.protocolVersion,
+        lastState: envelope.state,
         latest: {},
         history: [],
       };
       this.agents.set(uuid, record);
     } else {
       this.recordIdentityChanges(record, envelope, serverNow);
+      record.lastState = envelope.state;
     }
 
     record.name = envelope.agent.name;
@@ -138,32 +141,15 @@ export class AgentRegistry {
     return true;
   }
 
-  /** 派生在线状态（REQ-013）；记录不存在时 undefined（调用方先判 404）。 */
+  /** 派生在线状态（REQ-013）。记录不存在时返回 false（不在线）。 */
   isOnline(uuid: string, serverNow: number = Date.now()): boolean {
     const record = this.agents.get(uuid);
     return record === undefined ? false : this.recordOnline(record, serverNow);
   }
 
   private toSummary(record: AgentRecord, serverNow: number): AgentSummary {
-    // 最后上报状态：history 按到达顺序追加，倒序找最近一条 report。
-    let lastState: string | null = null;
-    for (let i = record.history.length - 1; i >= 0; i -= 1) {
-      const entry = record.history[i];
-      if (entry !== undefined && entry.kind === 'report') {
-        lastState = entry.state ?? null;
-        break;
-      }
-    }
-    if (lastState === null) {
-      // 回退：latest 中时间戳最大者（history 滚动截断或仅含 identity_change 时）。
-      let lastStateTs = -1;
-      for (const [state, entry] of Object.entries(record.latest)) {
-        if (entry.timestamp > lastStateTs) {
-          lastStateTs = entry.timestamp;
-          lastState = state;
-        }
-      }
-    }
+    const online = this.recordOnline(record, serverNow);
+    const status = deriveAgentStatus(record, { now: serverNow, online });
     return {
       uuid: record.uuid,
       name: record.name,
@@ -174,8 +160,11 @@ export class AgentRegistry {
       lastHeartbeat: record.lastHeartbeat,
       reportCount: record.reportCount,
       stateCount: Object.keys(record.latest).length,
-      online: this.recordOnline(record, serverNow),
-      lastState,
+      online,
+      lastState: record.lastState,
+      phase: status.phase,
+      health: status.health,
+      run: status.run,
     };
   }
 
@@ -187,18 +176,35 @@ export class AgentRegistry {
     return this.agents.get(uuid);
   }
 
+  /**
+   * 详情视图：注册记录字段（不含 history）+ 派生在线态 + 派生状态（相位/健康度/run 摘要）。
+   * board 路由直接序列化本结果。
+   */
+  detail(uuid: string, serverNow: number = Date.now()): Record<string, unknown> | undefined {
+    const record = this.agents.get(uuid);
+    if (record === undefined) {
+      return undefined;
+    }
+    const online = this.recordOnline(record, serverNow);
+    const status = deriveAgentStatus(record, { now: serverNow, online });
+    const body: Record<string, unknown> = { ...record };
+    delete body['history'];
+    return { ...body, online, status };
+  }
+
   history(uuid: string, query: HistoryQuery = {}): HistoryResult | undefined {
     const record = this.agents.get(uuid);
     if (record === undefined) {
       return undefined;
     }
     const limit = query.limit ?? 1000;
-    let entries = record.history;
-    if (query.state !== undefined) {
-      entries = entries.filter((entry) => entry.kind === 'report' && entry.state === query.state);
+    const { state, since } = query;
+    let entries: HistoryEntry[] = record.history;
+    if (state !== undefined) {
+      entries = entries.filter((entry) => entry.kind === 'report' && entry.state === state);
     }
-    if (query.since !== undefined) {
-      entries = entries.filter((entry) => entry.timestamp > query.since!);
+    if (since !== undefined) {
+      entries = entries.filter((entry) => entry.timestamp > since);
     }
     const truncated = entries.length > limit;
     if (truncated) {
@@ -207,7 +213,7 @@ export class AgentRegistry {
     }
     return {
       uuid,
-      ...(query.state === undefined ? {} : { state: query.state }),
+      ...(state === undefined ? {} : { state }),
       entries,
       truncated,
     };

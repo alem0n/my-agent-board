@@ -11,6 +11,7 @@
 import pino from 'pino';
 import type { BoardLogger } from './domain/logging.js';
 
+/** 初始级别：未显式配置时的种子值（见 configureLogging 的调用方 src/index.ts）。 */
 const level = process.env['LOG_LEVEL'] ?? 'info';
 
 export const logger = pino({
@@ -21,6 +22,14 @@ export const logger = pino({
     },
   },
 });
+
+/**
+ * 运行时调整级别。src/index.ts 在解析 server CLI 参数后调用：
+ * 显式 --log-level 覆盖环境变量种子值。
+ */
+export function configureLogging(newLevel: 'trace' | 'debug' | 'info' | 'warn' | 'error'): void {
+  logger.level = newLevel;
+}
 
 const bindLevel =
   (target: 'trace' | 'debug' | 'info' | 'warn' | 'error') =>

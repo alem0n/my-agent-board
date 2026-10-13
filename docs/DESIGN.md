@@ -247,7 +247,7 @@ interface StateContract {
 **before_provider_headers** v1.0.0 — `headerNames array<string> 必填 maxItems 128 items{string 1..128}`（仅键名，见 §9）
 **after_provider_response** v1.0.0 — `status integer 必填 100..599`；`headerNames array<string> 必填 maxItems 128`
 **provider_stream_event** v1.0.0 — `provider string 必填 1..64`；`api string 必填 1..64`；`model string 必填 1..128`；`eventType string 否 1..64`（取 `data.type`，取不到则缺省）
-**before_agent_start** v1.0.0 — `promptLength integer 必填 ≥0`；`imageCount integer 必填 ≥0`；`systemPromptLength integer 必填 ≥0`
+**before_agent_start** v1.1.0 — `promptLength integer 必填 ≥0`；`imageCount integer 必填 ≥0`；`systemPromptLength integer 必填 ≥0`；`messageType string 否 enum{user,custom}`（B4：区分用户 prompt 与扩展自定义消息发起的 run）
 **agent_start** v1.0.0 — 空对象
 **agent_end** v1.0.0 — `messageCount integer 必填 ≥0`；`roleCounts object 必填`（同 context）
 **agent_before_settle** v1.0.0 — `outcome string 必填 enum{completed,aborted,error}`；`entryCount integer 必填 ≥0`；`willContinue boolean 必填`
@@ -258,21 +258,22 @@ interface StateContract {
 **turn_end** v1.0.0 — `turnIndex integer 必填 ≥0`；`toolResultCount integer 必填 ≥0`；`messageRole string 必填 enum{user,assistant,toolResult}`；`willContinue boolean 必填`
 **message_start** v1.0.0 — `role string 必填 enum{user,assistant,toolResult}`；`contentPartCount integer 必填 ≥0`；`provider string 否 1..64`；`model string 否 1..128`
 **message_update** v1.0.0 — `role string 必填 enum{user,assistant,toolResult}`；`contentPartCount integer 必填 ≥0`；`eventType string 否 1..64`
-**message_end** v1.0.0 — `role string 必填 enum{user,assistant,toolResult}`；`contentPartCount integer 必填 ≥0`；`provider string 否`；`model string 否`；`stopReason string 否 1..64`；`usage object 否{input integer ≥0,output integer ≥0,cacheRead integer ≥0,cacheWrite integer ≥0,totalTokens integer ≥0}`
+**message_end** v1.1.0 — `role string 必填 enum{user,assistant,toolResult}`；`contentPartCount integer 必填 ≥0`；`provider string 否`；`model string 否`；`responseModel string 否 1..128`（B3：provider 实际响应模型，虚拟模型路由时与请求 model 不同）；`stopReason string 否 1..64`；`usage object 否{input integer ≥0,output integer ≥0,cacheRead integer ≥0,cacheWrite integer ≥0,totalTokens integer ≥0,cost object 否{input number ≥0,output number ≥0,cacheRead number ≥0,cacheWrite number ≥0,total number ≥0}}`（B2：费用为小数，不取整）
 **tool_execution_start** v1.0.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`parentToolCallId string 否 1..128`；`argKeys array<string> 必填 maxItems 64 items{string 1..64}`
 **tool_execution_update** v1.0.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`hasPartialResult boolean 必填`
-**tool_execution_end** v1.0.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`isError boolean 必填`；`contentPartCount integer 必填 ≥0`；`usageTotalTokens integer 否 ≥0`
+**tool_execution_end** v1.1.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`isError boolean 必填`；`contentPartCount integer 必填 ≥0`；`durationMs integer 否 ≥0`（B1：pi 事件原生执行时长，单调时钟）；`usageTotalTokens integer 否 ≥0`
 **model_select** v1.0.0 — `model string 必填 ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ 1..128`；`previousModel string 否 同格式`；`source string 必填 enum{set,cycle,restore}`
 **thinking_level_select** v1.0.0 — `level string 必填 1..32`；`previousLevel string 必填 1..32`
 **user_bash** v1.0.0 — `commandLength integer 必填 ≥0`；`excludeFromContext boolean 必填`；`cwd string 必填 1..4096`
 **input** v1.0.0 — `textLength integer 必填 ≥0`；`imageCount integer 必填 ≥0`；`source string 必填 enum{interactive,rpc,extension}`；`streamingBehavior string 否 enum{steer,followUp}`
 **tool_call** v1.0.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`parentToolCallId string 否 1..128`；`inputKeys array<string> 必填 maxItems 64 items{string 1..64}`
 **tool_result** v1.0.0 — `toolCallId string 必填 1..128`；`toolName string 必填 1..128`；`isError boolean 必填`；`usageTotalTokens integer 否 ≥0`；`contentPartCount integer 必填 ≥0`；`structuredContent boolean 必填`
-**agent_snapshot** v1.0.0 — `sessionId string 否 0..256`；`sessionName string 否 0..256`；`cwd string 必填 1..4096`；`mode string 必填 enum{tui,rpc,json,print}`；`hasUI boolean 必填`；`isProjectTrusted boolean 必填`；`isIdle boolean 必填`；`hasPendingMessages boolean 必填`；`model string 否 provider/id 格式`；`thinkingLevel string 否 1..32`；`contextUsage object 否{tokens integer|null,min 0; contextWindow integer ≥0; percent number|null 0..100}`；`activeToolCount integer 必填 ≥0`；`piVersion string 否 1..64`；`uptimeMs integer 必填 ≥0`
+**agent_snapshot** v1.1.0 — `sessionId string 否 0..256`；`sessionName string 否 0..256`；`cwd string 必填 1..4096`；`mode string 必填 enum{tui,rpc,json,print}`；`hasUI boolean 必填`；`isProjectTrusted boolean 必填`；`isIdle boolean 必填`；`hasPendingMessages boolean 必填`；`model string 否 provider/id 格式`；`thinkingLevel string 否 1..32`；`contextUsage object 否{tokens integer|null,min 0; contextWindow integer ≥0; percent number|null 0..100}`；`transport object 否{dropped integer ≥0, droppedRejected integer ≥0, flushFailures integer ≥0, unreachable boolean, unreachableSince integer|null ≥0}`（B5：client→server 链路自身健康，派生层据此标记 \`transport-drop\` 数据可信度信号）；`activeToolCount integer 必填 ≥0`；`piVersion string 否 1..64`；`uptimeMs integer 必填 ≥0`
 
 ### 3.3 契约演进规则
 
-- 契约 semver：新增可选字段 / 放宽约束 = MINOR；收紧 / 删除 / 改类型 = MAJOR。
+- 契约 semver：新增可选字段 / 放宽约束 = MINOR；收紧 / 删除 / 改类型 = MAJOR。v1.1.0 升级（`before_agent_start`/`message_end`/`tool_execution_end`/`agent_snapshot`）为 BOARD.md P1/P3 的加法式新增字段。
+- 兼容性方向：旧 client 上报到新 server——可选字段缺失，接受。新 client 上报到旧 server——新字段被判为未知键拒绝（`E_INVALID_PAYLOAD`）；本仓库为单仓原子发布，两侧契约同源，跨版本混部时以 server 契约版本为准。
 - server 按状态 + 主版本路由校验；未知状态 → `E_UNKNOWN_STATE`（不静默接受）。
 - 新增状态 = 注册表追加条目，既有契约文件结构不动（满足"新增状态不需修改既有契约结构"）。
 - 信封协议版本独立于契约版本（见 §4）。
@@ -360,10 +361,10 @@ server 端查询 API 永远返回当前值 + 可查变化历史。
 |---|---|---|---|
 | POST | `/v1/report` | 单信封 | `200 { ok:true, uuid, assigned:boolean }` |
 | POST | `/v1/report/batch` | `{ reports: Envelope[] }`（≤512 条，body ≤4MB） | `200 { ok:true, accepted:n, uuid, assigned, rejected:[{index,code,message,state?}] }`（原子批：非法信封所在批次整体拒绝并逐条返回；client 剔除被拒条目后重试剩余；无 uuid 批量的信封共用本批首个 uuid，assigned 为请求级） |
-| GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastHeartbeat,reportCount,stateCount,online,lastState}] }`（`online` 为派生态：`now - max(lastSeen,lastHeartbeat) ≤ 60s`，REQ-013） |
+| GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastSeen,lastHeartbeat,reportCount,stateCount,online,lastState, phase, health:{level,attention[]}, run:{...}}] }`（`online` 为派生态：`now - max(lastSeen,lastHeartbeat) ≤ 60s`，REQ-013；`phase`/`health`/`run` 为 BOARD.md A1-A4 派生态） |
 | DELETE | `/v1/agents/:uuid` | — | `200 { uuid, deleted:true }`；不存在 → `404 E_NOT_FOUND`。治理操作：请求即授权（Web UI 详情面板提供确认后删除） |
 | POST | `/v1/heartbeat` | `{ uuid }` | `200 { ok:true, uuid }`；记录不存在 → `404 E_NOT_FOUND`（心跳**不创建/不复活**记录）。进程级在线探测（REQ-013）：仅更新 `lastHeartbeat`，不写 latest、不计 reportCount、不入 history；GET该方法 → 405 |
-| GET | `/v1/agents/:uuid` | — | `200 { …注册表当前值…, latest: Record<StateId,{timestamp,payload}>, online }` |
+| GET | `/v1/agents/:uuid` | — | `200 { uuid,name,cwd,sessionId,firstSeen,lastSeen,lastHeartbeat,reportCount,protocolVersion,lastState, latest: Record<StateId,{timestamp,payload}>, online, status:{ phase, health:{level, attention:{severity,signal,detail}[]}, run:{running,startedAt,endedAt,durationMs,outcome,turns,toolCalls,totalTokens} } }`。**不含 `history`**：历史一律走 `/history` 端点，避免详情轮询重复传输全量历史；`status` 为派生态（BOARD.md A1-A4） |
 | GET | `/v1/agents/:uuid/history` | `?state=&limit=≤1000&since=epoch ms` | `200 { uuid, state?, entries:[HistoryEntry], truncated:boolean }` |
 | GET | `/v1/health` | — | `200 { status:"ok", protocolVersion:"1", agents:n, uptimeMs }` |
 

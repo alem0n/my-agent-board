@@ -409,14 +409,15 @@ const CONTRACTS: StateContract[] = [
   // --- agent 运行循环 --------------------------------------------------------
   {
     state: 'before_agent_start',
-    version: '1.0.0',
+    version: '1.1.0',
     trigger: '用户提交 prompt 后、agent 循环前',
     frequency: 'event',
-    description: 'agent 循环前事件：提示词长度、图片数、系统提示长度。',
+    description: 'agent 循环前事件：提示词长度、图片数、系统提示长度与触发来源。',
     payload: payload([
       int('promptLength', true, 0),
       int('imageCount', true, 0),
       int('systemPromptLength', true, 0),
+      str('messageType', false, { enum: ['user', 'custom'] }),
     ]),
   },
   {
@@ -528,15 +529,16 @@ const CONTRACTS: StateContract[] = [
   },
   {
     state: 'message_end',
-    version: '1.0.0',
+    version: '1.1.0',
     trigger: '消息结束（可替换最终消息）',
     frequency: 'event',
-    description: '消息结束：角色、分片数、模型、停止原因与用量。',
+    description: '消息结束：角色、分片数、模型、实际响应模型、停止原因与用量（含费用）。',
     payload: payload([
       str('role', true, { enum: ['user', 'assistant', 'toolResult'] }),
       int('contentPartCount', true, 0),
       str('provider', false, { min: 1, max: 64 }),
       str('model', false, { min: 1, max: 128 }),
+      str('responseModel', false, { min: 1, max: 128 }),
       str('stopReason', false, { min: 1, max: 64 }),
       obj(
         'usage',
@@ -546,6 +548,17 @@ const CONTRACTS: StateContract[] = [
           int('cacheRead', false, 0),
           int('cacheWrite', false, 0),
           int('totalTokens', false, 0),
+          obj(
+            'cost',
+            [
+              num('input', false, 0),
+              num('output', false, 0),
+              num('cacheRead', false, 0),
+              num('cacheWrite', false, 0),
+              num('total', false, 0),
+            ],
+            false,
+          ),
         ],
         false,
       ),
@@ -577,15 +590,16 @@ const CONTRACTS: StateContract[] = [
   },
   {
     state: 'tool_execution_end',
-    version: '1.0.0',
+    version: '1.1.0',
     trigger: '工具执行结束',
     frequency: 'event',
-    description: '工具执行结束：调用标识、错误标志、用量。',
+    description: '工具执行结束：调用标识、错误标志、执行时长与用量。',
     payload: payload([
       str('toolCallId', true, { min: 1, max: 128 }),
       str('toolName', true, { min: 1, max: 128 }),
       bool('isError', true),
       int('contentPartCount', true, 0),
+      int('durationMs', false, 0),
       int('usageTotalTokens', false, 0),
     ]),
   },
@@ -671,10 +685,10 @@ const CONTRACTS: StateContract[] = [
   // --- 周期采样状态 ----------------------------------------------------------
   {
     state: 'agent_snapshot',
-    version: '1.0.0',
+    version: '1.1.0',
     trigger: '每 reportIntervalMs（默认 30s）；session_start 与 agent_end 边界补采',
     frequency: 'periodic',
-    description: 'agent 环境快照：ExtensionContext 可采样字段全集。',
+    description: 'agent 环境快照：ExtensionContext 可采样字段全集 + client 传输健康。',
     payload: payload([
       str('sessionId', false, { min: 0, max: 256 }),
       str('sessionName', false, { min: 0, max: 256 }),
@@ -692,6 +706,17 @@ const CONTRACTS: StateContract[] = [
           { name: 'tokens', type: 'integer', required: false, nullable: true, min: 0 },
           int('contextWindow', false, 0),
           num('percent', false, 0, 100, { nullable: true }),
+        ],
+        false,
+      ),
+      obj(
+        'transport',
+        [
+          int('dropped', false, 0),
+          int('droppedRejected', false, 0),
+          int('flushFailures', false, 0),
+          bool('unreachable', false),
+          { name: 'unreachableSince', type: 'integer', required: false, nullable: true, min: 0 },
         ],
         false,
       ),

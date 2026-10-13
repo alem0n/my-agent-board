@@ -13,17 +13,30 @@ export interface ServerConfig {
   readonly logLevel: 'trace' | 'debug' | 'info' | 'warn' | 'error';
   /** 挂载内置 Web UI（GET / 与 /ui）。默认关闭：用户可自行可视化。 */
   readonly webUi: boolean;
+  /** 用户是否显式提供了 --log-level（决定是否覆盖环境变量种子值）。 */
+  readonly logLevelProvided: boolean;
+  /** 参数回退提示（非法值回退到默认值时生成，由入口记 warn 日志）。 */
+  readonly warnings: readonly string[];
 }
 
-const DEFAULTS: ServerConfig = {
+const DEFAULTS = {
   host: '127.0.0.1',
   port: 7878,
-  logLevel: 'info',
+  logLevel: 'info' as const,
   webUi: false,
 };
 
 /** 期待值的参数（其他裸 --key 一律按开关处理，不进入值解析）。 */
 const VALUE_KEYS: ReadonlySet<string> = new Set(['port', 'host', 'log-level']);
+
+/** 合法日志级别取值。 */
+const LOG_LEVEL_VALUES = ['trace', 'debug', 'info', 'warn', 'error'] as const;
+
+type LogLevelValue = (typeof LOG_LEVEL_VALUES)[number];
+
+function isLogLevel(value: string): value is LogLevelValue {
+  return (LOG_LEVEL_VALUES as readonly string[]).includes(value);
+}
 
 function parseArgs(argv: readonly string[]): Record<string, string> {
   const args: Record<string, string> = {};
@@ -58,27 +71,49 @@ function parseArgs(argv: readonly string[]): Record<string, string> {
 export function loadServerConfig(argv: readonly string[] = process.argv): ServerConfig {
   const args = parseArgs(argv);
 
-  const port = Number.parseInt(args['port'] ?? '', 10);
-  const host = args['host'];
-  const logLevel = args['log-level'];
+  const warnings: string[] = [];
+
+  const portRaw = args['port'];
+  const port = Number.parseInt(portRaw ?? '', 10);
+  if (portRaw !== undefined && !(Number.isInteger(port) && port >= 1 && port <= 65535)) {
+    warnings.push(`invalid --port '${portRaw}', using ${DEFAULTS.port}`);
+  }
+
+  const hostRaw = args['host'];
+  if (hostRaw !== undefined && !(hostRaw.length >= 1 && hostRaw.length <= 255)) {
+    warnings.push(`invalid --host '${hostRaw}', using ${DEFAULTS.host}`);
+  }
+
+  const logLevelRaw = args['log-level'];
+  const logLevelProvided = logLevelRaw !== undefined;
+  const logLevelValid = logLevelProvided && isLogLevel(logLevelRaw);
+  if (logLevelProvided && !logLevelValid) {
+    warnings.push(`invalid --log-level '${logLevelRaw}', using ${DEFAULTS.logLevel}`);
+  }
+
   const webRaw = args['web'];
-  // 非法值一律视为关闭（opt-in 语义；启动日志会明确告知挂载状态）。
   const webUi =
     webRaw === undefined
       ? DEFAULTS.webUi
       : ['1', 'true', 'yes', 'on'].includes(webRaw.toLowerCase());
+  if (
+    webRaw !== undefined &&
+    !webUi &&
+    !['0', 'false', 'no', 'off'].includes(webRaw.toLowerCase())
+  ) {
+    warnings.push(`invalid --web '${webRaw}', treated as off`);
+  }
 
   return {
-    host: typeof host === 'string' && host.length >= 1 && host.length <= 255 ? host : DEFAULTS.host,
+    host:
+      typeof hostRaw === 'string' && hostRaw.length >= 1 && hostRaw.length <= 255
+        ? hostRaw
+        : DEFAULTS.host,
     port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : DEFAULTS.port,
     logLevel:
-      logLevel === 'trace' ||
-      logLevel === 'debug' ||
-      logLevel === 'info' ||
-      logLevel === 'warn' ||
-      logLevel === 'error'
-        ? logLevel
-        : DEFAULTS.logLevel,
+      logLevelRaw !== undefined && isLogLevel(logLevelRaw) ? logLevelRaw : DEFAULTS.logLevel,
     webUi,
+    logLevelProvided,
+    warnings,
   };
 }

@@ -10,12 +10,20 @@
  */
 import process from 'node:process';
 import { loadServerConfig } from './config.js';
-import { boardLogger as logger } from './logger.js';
+import { boardLogger as logger, configureLogging, logger as rootLogger } from './logger.js';
 import { AgentRegistry } from './services/registry.js';
 import { BoardHttpServer } from './infrastructure/http-server.js';
 
 export async function main(): Promise<number> {
   const config = loadServerConfig();
+
+  // 显式 --log-level 覆盖环境变量种子值；非法值已在解析层回退默认并生成告警。
+  if (config.logLevelProvided) {
+    configureLogging(config.logLevel);
+  }
+  for (const warning of config.warnings) {
+    logger.warn('server.configFallback', { warning });
+  }
 
   const registry = new AgentRegistry(logger, { historyLimit: 1000 });
 
@@ -31,6 +39,7 @@ export async function main(): Promise<number> {
   logger.info('server.started', {
     host: address.host,
     port: address.port,
+    logLevel: rootLogger.level,
     webUi: config.webUi,
     endpoints: [
       'POST /v1/report',
@@ -64,7 +73,13 @@ export async function main(): Promise<number> {
 }
 
 if (!process.env['VITEST'] && process.env.NODE_ENV !== 'test') {
-  void main().then((code) => {
-    process.exitCode = code;
-  });
+  void main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      // 启动失败（端口占用等）：结构化错误日志 + 非 0 退出，避免裸 unhandled rejection。
+      logger.error('server.startupFailed', { error: String(error) });
+      process.exitCode = 1;
+    });
 }

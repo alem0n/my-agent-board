@@ -7,6 +7,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { main } from '../src/index.js';
+import { logger as rootLogger } from '../src/logger.js';
 import * as servicesIndex from '../src/services/index.js';
 import * as infraIndex from '../src/infrastructure/index.js';
 import * as domainIndex from '../src/domain/index.js';
@@ -32,7 +33,13 @@ describe('server 入口 main()', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-entry-'));
     const port = await freePort();
     const argv = process.argv;
-    process.argv = ['node', 'src/index.ts', `--port=${port}`, '--host=127.0.0.1'];
+    process.argv = [
+      'node',
+      'src/index.ts',
+      `--port=${port}`,
+      '--host=127.0.0.1',
+      '--log-level=warn',
+    ];
 
     const running = main();
     // 轮询健康端点（启动时间受机器/插桩负载影响，固定等待会时序脆弱）
@@ -45,10 +52,15 @@ describe('server 入口 main()', () => {
     }
     expect(healthy).toBe(true);
 
+    // --log-level 接线：显式提供时覆盖环境变量种子值（S1 回归保护）
+    expect(rootLogger.level).toBe('warn');
+
     process.emit('SIGINT');
     const code = await running;
     expect(code).toBe(0);
     process.argv = argv;
+    // 恢复默认级别，避免污染同 worker 后续测试
+    rootLogger.level = 'info';
 
     // 注册表纯内存：关闭不落盘（不依赖机器状态：断言 main() 未向任何路径写出 agents.json）
     expect(fs.existsSync(path.join(dir, 'agents.json'))).toBe(false);

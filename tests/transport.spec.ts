@@ -663,3 +663,64 @@ describe('优雅关闭：尽力排空与退出唤醒', () => {
     }
   });
 });
+
+describe('传输健康快照（B5：transport 计数经 agent_snapshot 上报）', () => {
+  it('失败计数与不可达状态经快照携带至 server', async () => {
+    const transport = new ScriptedTransport();
+    // flush 全失败 → 不可达；首次健康探测失败、第二次成功，睡眠门控让快照在不可达期间冻结。
+    transport.failAll = true;
+    transport.healthOkAfter = 1;
+    let releaseSleep: () => void = () => undefined;
+    const sleepGate = new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    });
+    const reporter = new Reporter({
+      source: { subscribe: () => () => undefined },
+      env: { snapshot: envSnapshot },
+      transport,
+      identityStore: new MemIdentityStore(),
+      config: {
+        ...baseConfig,
+        retry: { ...baseConfig.retry, maxAttempts: 1, initialDelayMs: 1 },
+      },
+      logger: silentLogger,
+      now: () => NOW,
+      sleep: async () => sleepGate,
+      random: () => 0,
+    });
+    try {
+      reporter.start();
+      reporter.collectSnapshot();
+      await reporter.flushNow(); // 失败 → 不可达，恢复探测进入门控睡眠
+      expect(reporter.isReachable()).toBe(false);
+      expect(reporter.getStats().flushFailures).toBe(1);
+
+      // 不可达期间采集：快照冻结当前传输健康（不可达 + 失败计数 + 起始时间）。
+      reporter.collectSnapshot();
+
+      // 恢复链路后再放行：探测成功 → 缓冲排空，两份快照到达 server。
+      transport.failAll = false;
+      releaseSleep();
+      await waitFor(() => transport.batches.some((batch) => batch.length > 1), 200);
+
+      const snapshots = transport.batches
+        .flat()
+        .filter((env) => env.state === 'agent_snapshot')
+        .map((env) => env.payload as Record<string, unknown>);
+      const unreachable = snapshots.find((payload) => {
+        const t = payload['transport'] as Record<string, unknown> | undefined;
+        return t !== undefined && t['unreachable'] === true;
+      });
+      expect(unreachable).toBeDefined();
+      expect(unreachable!['transport']).toMatchObject({
+        dropped: 0,
+        droppedRejected: 0,
+        flushFailures: 1,
+        unreachable: true,
+        unreachableSince: NOW,
+      });
+    } finally {
+      await reporter.stop();
+    }
+  });
+});
