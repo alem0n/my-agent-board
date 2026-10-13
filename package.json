@@ -1,46 +1,8 @@
 {
-  "name": "my-agent-board",
+  "name": "my-agent-board-client",
   "version": "0.3.0",
-  "description": "client-server 架构的 pi agent 状态监控系统：client 为 pi 扩展（采集全部 42 项受支持状态上报），server 聚合并提供查询 API",
+  "description": "pi agent 状态监控 client（自包含部署产物；server 单独部署）",
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "scripts": {
-    "dev": "tsx src/index.ts",
-    "demo": "bash scripts/demo.sh",
-    "simulate": "tsx src/simulate.ts",
-    "pack:client": "node scripts/pack-client.mjs",
-    "pack:server": "node scripts/pack-server.mjs",
-    "split:client": "node scripts/split.mjs client",
-    "split:server": "node scripts/split.mjs server",
-    "build": "tsc",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "lint": "eslint .",
-    "lint:layers": "depcruise src --config .dependency-cruiser.cjs",
-    "typecheck": "tsc --noEmit",
-    "format:check": "prettier --check .",
-    "format:fix": "prettier --write .",
-    "check": "pnpm lint && pnpm run typecheck && pnpm run format:check && pnpm run test:coverage && pnpm audit --prod"
-  },
-  "dependencies": {
-    "pino": "^9.5.0"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.1.0",
-    "@eslint/js": "^9.18.0",
-    "@types/node": "^22.10.0",
-    "@vitest/coverage-v8": "^3.0.0",
-    "dependency-cruiser": "^16.10.0",
-    "eslint": "^9.18.0",
-    "prettier": "^3.4.2",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
-    "typescript-eslint": "^8.21.0",
-    "vitest": "^3.0.0"
-  },
-  "packageManager": "pnpm@12.9.1",
   "keywords": [
     "pi-package"
   ],

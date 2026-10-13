@@ -1,276 +1,86 @@
-# my-agent-board
+# my-agent-board client
 
-pi agent 状态监控系统。client 是一个 pi 扩展，采集 pi agent 的全部受支持状态并上报。server 接收、聚合并对外查询。
+> 📦 **本分支（仓库默认分支）是 client 安装产物**：15 个模块、零运行时依赖。
+> 源码、测试与完整文档在 `main` 分支：`git clone -b main https://github.com/alem0n/my-agent-board`
 
-- **client**：`extension/agent-board.ts`，订阅 pi 的 41 个扩展事件，并周期采样一个环境快照，共 **42 项状态**。
-- **server**：独立 Node 进程，校验上报、分配 agent uuid、按 uuid 聚合最新状态与历史。
-- **协议**：HTTP + JSON。信封带协议版本，每个状态有独立带版本号的契约。
+pi agent 状态监控 client。订阅 pi 扩展的 41 个事件并周期采样环境快照，共 42 项状态，HTTP+JSON 上报到独立部署的 server（server 分支单独部署）。
 
-通信方式、状态清单、字段约束与错误码见 [`docs/DESIGN.md`](docs/DESIGN.md)。
+## 安装
 
-## 功能特性
-
-- 覆盖 pi 扩展手册中的全部受支持状态（41 事件 + 1 快照）。
-- 每个状态一条独立契约（字段、类型、必填、取值范围、版本号）。
-- agent 身份：name 未设置时回退 session id；uuid 由 server 分配并本地持久化。
-- 可靠传输：指数退避重试、断线健康探测恢复、内存缓冲（超限丢弃最旧，监控态无需持久化）。
-- 隐私设计：只上报长度、计数、键名和枚举，不采集提示词、命令与参数内容。
-- client 全异步 IO，不阻塞 pi 主线程。
-- client 与 server 可分别独立部署。
-
-## 环境要求
-
-- Node.js ≥ 22.19
-- pnpm ≥ 10（仓库锁定 `pnpm@12.9.1`）
-- 真实使用 client 时需要已安装 [pi](https://pi.dev)（`curl -fsSL https://pi.dev/install.sh | sh`）
-
-server 与 client 均无外部 SaaS 或付费依赖。运行时依赖仅 `pino`（日志），其余全部使用 Node 内置模块。
-
-## 快速开始
+官方一行安装（克隆本默认分支，即此产物）：
 
 ```bash
-git clone <repo-url> my-agent-board
-cd my-agent-board
-pnpm install
-```
-
-一条命令完成本地启动（server + 模拟 client）：
-
-```bash
-pnpm demo
-```
-
-该脚本会启动 server、注入一个模拟 pi 环境驱动真实 client 库回放全部 42 项状态，并打印 server 端观察结果。成功时输出包含：
-
-```
-"emittedEvents":41,"collected":46,"sent":44,"droppedRejected":0,...,"snapshotStates":42
-"agent":{"uuid":"<分配的 uuid>","name":"demo-agent",...,"reportCount":44,"stateCount":42}
-[demo] DONE
-```
-
-server 退出后自动清理临时数据。指定端口或保留数据目录：
-
-```bash
-PORT=8099 pnpm demo
-KEEP_DATA=1 pnpm demo
-```
-
-## 使用说明
-
-### 1. 启动 server
-
-```bash
-pnpm dev          # 默认 127.0.0.1:7878
-pnpm dev -- --port=8099 --host=0.0.0.0 --log-level=debug
-pnpm dev -- --web      # 挂载内置 Web UI（GET / 与 /ui）
-```
-
-参数：`--port`、`--host`、`--log-level`、`--web`（值参数支持 `--port=8099` 与 `--port 8099` 两种形式）。非法值自动回退默认并记录日志。
-
-Web UI 为**开关参数、默认关闭**：你需要可视化时加 `--web`（同端口 `/` 与 `/ui`，自动刷新 3s，零外部资源）；想用自己的可视化（Grafana、自写面板……）时不开即可，直接消费 `/v1/*` JSON API。
-
-### 2. server API
-
-| 方法 | 路径                                            | 说明                                  |
-| ---- | ----------------------------------------------- | ------------------------------------- |
-| GET  | `/v1/health`                                    | 健康检查（状态、协议版本、agent 数）  |
-| GET  | `/v1/agents`                                    | agent 列表摘要                        |
-| GET  | `/v1/agents/:uuid`                              | 单 agent 注册记录（不含 history）+ 逐状态最新载荷    |
-| GET  | `/v1/agents/:uuid/history?state=&limit=&since=` | 历史记录                              |
-| POST | `/v1/report`                                    | 单信封上报                            |
-| POST | `/v1/report/batch`                              | 批量上报（原子批，上限 512 条 / 4MB） |
-
-示例：
-
-```bash
-curl http://127.0.0.1:7878/v1/health
-curl http://127.0.0.1:7878/v1/agents | jq '.agents[] | {uuid, name, stateCount, reportCount}'
-curl "http://127.0.0.1:7878/v1/agents/<uuid>/history?state=agent_snapshot&limit=5"
-```
-
-注册表为纯内存：进程内聚合、不写盘，重启即清空（监控状态持续刷新，无离线保留价值）。
-
-### 3. 安装 client 插件
-
-前置条件：server 在可达地址运行。
-
-**按需获取**——仓库默认分支即 client 产物分支（安装最省事），开发在 main：
-
-```bash
-# 方式一：官方 URL 一行安装（克隆默认分支 = client 产物，零 server 代码）
 pi install https://github.com/alem0n/my-agent-board
+pi list                # 查看已配置包
+```
 
-# 方式二：锁定版本（发布 tag；pi URL 安装不支持 #tag，用两步）
+锁定版本（发布 tag；pi 的 URL 安装不支持 `#tag` 引用，用两步）：
+
+```bash
 git clone --depth 1 --branch v0.1.0 https://github.com/alem0n/my-agent-board my-ab-client
 pi install ./my-ab-client
-
-# 方式三：开发（main 为源码分支）
-git clone -b main https://github.com/alem0n/my-agent-board
 ```
 
-仓库分支布局：`client`（默认，orphan 产物，15 模块零依赖）/ `server`（orphan 产物，
-编译 JS + pino 声明，`git clone --branch server`）/ `main`（开发全量：源码 + 测试 + 文档）。
-client 运行时闭包不含 server 代码，由 `tests/separation.spec.ts` 与 depcruiser 双向规则保证。
-
-> pi 的 URL 安装只支持**默认分支**——`github:user/repo#branch`、`git+https://…#branch`、
-> tarball URL 实测均不被 pi 的安装解析器支持（报路径不存在或 clone 失败）。
-> 这也是为什么把 client 产物设为默认分支：一行安装即为精简安装。
-
-**安装位置**（实测）：URL 安装落在 `~/.pi/agent/git/github.com/alem0n/my-agent-board`
-（路径按 URL 推导，与分支/tag 无关，重装覆盖该目录）；本地路径安装不复制文件，
-settings.json 里存相对源目录的引用（移动/重命名源目录会导致引用失效，需重装）。
-
-**方式一：显式加载（开发推荐）**
+或克隆本分支后本地安装：
 
 ```bash
-pi --extension ./extension/agent-board.ts        # TypeScript 源码，jiti 直接编译
-pi --extension ./dist/extension/agent-board.js   # pnpm build 后的编译产物
+git clone --depth 1 https://github.com/alem0n/my-agent-board my-ab-client
+pi install ./my-ab-client
 ```
 
-**方式二：用户级安装**（写入 `~/.pi/agent/settings.json`，对所有项目生效）
-
-```jsonc
-{
-  "extensions": ["+/abs/path/to/my-agent-board/dist/extension/agent-board.js"]
-}
-```
-
-**方式三：本地 pi 包安装**
+或显式加载：
 
 ```bash
-pi install ./              # 仓库已声明 pi 清单（pi-package 关键字）
-pi list                    # 查看已配置包
-pi remove ./               # 卸载
+pi --extension ./extension/agent-board.ts
 ```
 
-**方式四：项目级安装**（仅当前项目，需项目信任）
+**安装位置**：URL 安装落在 `~/.pi/agent/git/github.com/alem0n/my-agent-board`（路径按 URL
+推导，与分支/tag 无关）；本地路径安装不复制，settings 存源目录的相对引用。
 
-```bash
-pi install --local ./      # 写入 .pi/settings.json
-```
+## 配置
 
-或把独立 client 产物 `build/client` 整体拷贝到 `.pi/extensions/`。
-
-### 4. client 配置
-
-配置文件 `~/.pi/agent/agent-board-server.json`（可选）。缺失时输出错误日志并降级到默认地址。
+配置文件 `~/.pi/agent/agent-board-server.json`（可选；缺失时降级默认地址，问题记录到 issues）：
 
 ```json
 {
-  "url": "http://127.0.0.1:7878",
+  "url": "http://your-server-host:7878",
   "name": "my-agent",
-  "reportIntervalMs": 30000,
-  "flushIntervalMs": 2000,
-  "requestTimeoutMs": 5000,
-  "maxBufferSize": 1000,
-  "flushOnCount": 50,
-  "retry": {
-    "maxAttempts": 5,
-    "initialDelayMs": 500,
-    "maxDelayMs": 30000,
-    "backoffFactor": 2,
-    "jitter": true
-  }
+  "logLevel": "info"
 }
 ```
 
-`url` 与 `host` + `port` 二选一。全字段语义见 [`docs/DESIGN.md`](docs/DESIGN.md) §6.3。环境变量 `AGENT_BOARD_SERVER_CONFIG` 可覆盖配置文件路径（用于测试与隔离部署）。
+字段：`url`（或 `host`+`port`）、`name`、`logLevel`、`reportIntervalMs`、`flushIntervalMs`、`requestTimeoutMs`、`maxBufferSize`、`flushOnCount`、`heartbeatIntervalMs`（默认 20s，`0` = 关闭）、`retry`。非法值一律降级默认，不静默失败。
 
-client 运行时写入三个本地文件：
+**进程级心跳**：扩展加载即启动（与 session 生命周期解耦），周期性向 server 发送携带身份 uuid 的心跳，使 server 能在无活跃会话的静默期判断本进程是否在线（server 侧 `online` 派生，见 README.server）。身份尚未建立时跳过（不伪造身份）；失败不进入重试队列（下一周期自然重试）。
 
-| 文件                                    | 用途                   |
-| --------------------------------------- | ---------------------- |
-| `~/.pi/agent/agent-board-identity.json` | server 分配的 uuid     |
-| `~/.pi/agent/agent-board-client.log`    | client 日志（JSON 行） |
+环境变量 `AGENT_BOARD_SERVER_CONFIG` 可覆盖配置文件路径。
 
-client 在 TUI / RPC / print / JSON 全模式下均可运行。它只观察会话，不修改会话内容；`project_trust` 返回 `undecided`。
+## 日志（默认关闭）
 
-## 测试与质量门禁
+client 默认**零日志**：不创建日志文件、不产生任何日志 IO。两种方式显式开启：
 
-```bash
-pnpm test                    # 全量（159 个用例）
-pnpm test -- tests/e2e.spec.ts
-pnpm exec vitest run -t "uuid 分配"
-pnpm run test:coverage
-make check                   # 完整门禁：lint + typecheck + format + 覆盖率 + 依赖审计
-make layers                  # 分层依赖契约 + client/server 分离规则
-```
+- 配置文件 `"logLevel": "info"`（取值 `silent` / `trace` / `debug` / `info` / `warn` / `error`）；
+- 环境变量 `AGENT_BOARD_LOG_LEVEL`（优先级更高；配置文件本身损坏时的诊断入口）。
 
-必测类别齐备：契约校验、身份分配、配置解析、重连重试，外加端到端、扩展胶水、pi 模拟器与文件存储。覆盖率阈值 80%。
+开启后日志为 JSON 行，写入 `~/.pi/agent/agent-board-client.log`，内容含 `reporter.start`、`report.retry`、`transport.unreachable`、`report.shutdownDropped`、`client.config.issue` 等键。
 
-## 项目结构
+## 运行足迹
 
-```
-extension/agent-board.ts     pi 扩展入口（client 方式一/三的加载点）
-src/domain/                  契约、状态注册表、校验、身份规则（无外部依赖）
-src/services/                Reporter（client 采集编排）、AgentRegistry（server 聚合）
-src/infrastructure/          HTTP server / HTTP client / 文件存储 / pi 扩展胶水 / 模拟器
-src/index.ts                 server 入口
-src/simulate.ts              模拟 client 入口（演示与手动验证）
-scripts/demo.sh              一键本地演示
-scripts/pack-client.mjs      client 独立打包产物
-tests/                       测试镜像源码树
-docs/                        设计文档与验收记录
-```
+- `~/.pi/agent/agent-board-identity.json` — server 分配的 uuid
+- `~/.pi/agent/agent-board-client.log` — 日志（**仅 logLevel 开启时存在**，默认不创建）
 
-分层依赖方向单向指向 domain（由 `make layers` 机器校验）。
+全异步 IO，不阻塞 pi 主线程。发送失败按指数退避重试并保留缓冲；server 不可达时停止上报并周期健康探测，恢复后继续；会话关闭时尽力排空缓冲（限时 3s），超时或不可达时丢弃残留并计数。
 
-## 开发指南
+## 排障
 
-变更前请读 [`AGENTS.md`](AGENTS.md)（项目规范）与 [`docs/SPEC.md`](docs/SPEC.md)（需求清单）。
+- **先开日志**：默认零日志，排障前在配置文件加 `"logLevel": "info"`（或设 `AGENT_BOARD_LOG_LEVEL=info`）后复现。
+- 日志出现 `transport.unreachable`：server 未运行，或 `agent-board-server.json` 的 `url` 与实际部署不一致。client 自动重试与探测，不影响 pi 本身。
+- 日志出现 `report.shutdownDropped`（字段 `dropped`）：关闭时缓冲未能发出（server 不可达）。启动 server 后，下一会话重新采集全部当前状态。
+- 日志出现带 `reason: "shutdown"` 的 `buffer.overflow`：关闭排空超过 3s 限时后的残留丢弃，原因同上。
+- 运行中出现 `buffer.overflow`（无 reason）：server 不可达期间缓冲饱和（默认 1000 条）。server 恢复后自动排空最新 1000 条。
 
-### 质量门禁
+## 协议
 
-提交前执行 `make check`。`make precommit`（git 钩子）运行其快速子集。任何代码变更必须附带或更新对应测试。
+信封协议版本 `1`；每个状态有独立 semver 契约。server 与 client 可独立演进，不兼容时 server 返回 `E_UNSUPPORTED_PROTOCOL`。
 
-### 修改或新增状态契约
-
-契约的唯一信源是 `src/domain/contracts.ts` 的 `STATE_REGISTRY`。
-
-1. 新增状态：向注册表追加条目（不修改既有契约结构）。
-2. 字段变更：按 semver 升契约版本；收紧或删除字段升 MAJOR，放宽或新增可选字段升 MINOR。
-3. 同步更新 `tests/fixtures/samples.ts` 合法样本。
-4. `tests/contracts.spec.ts` 覆盖注册表完整性；`tests/mapper*.spec.ts` 覆盖映射器输出。
-
-### 修改 client 运行时
-
-client 在 pi 交互进程内运行，禁止同步文件 IO。`tests/async-io.spec.ts` 静态扫描 `fs.*Sync(`，`tests/separation.spec.ts` 断言 client 闭包不含 server 模块与第三方运行时导入。
-
-## 部署拓扑
-
-| 拓扑             | server     | client                                           |
-| ---------------- | ---------- | ------------------------------------------------ |
-| 同机开发         | `pnpm dev` | `pi --extension ./extension/agent-board.ts`      |
-| 独立 client 产物 | 任意主机   | `pnpm pack:client` → `pi install ./build/client` |
-| 跨机部署         | 远端主机   | 配置 `url` 指向远端 server                       |
-
-```bash
-pnpm pack:client      # 生成 build/client/（15 个模块、零运行时依赖、pi 清单）
-```
-
-分离契约与演进规则见 [`docs/DESIGN.md`](docs/DESIGN.md) §1.5 与 §3.3。
-
-## 常见问题
-
-| 现象                 | 排查                                                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| client 无上报        | client 日志默认关闭：先设 `"logLevel": "info"` 或 `AGENT_BOARD_LOG_LEVEL=info`，再查 `agent-board-client.log` 的 `client.config.*` 与 `transport.unreachable` |
-| server 无 agent 记录 | 预期内：注册表纯内存，server 重启即清空；等待 client 首次上报 |
-| 上报被拒绝           | client 日志 `report.rejected` 含 code 与字段；错误码对照 [`docs/DESIGN.md`](docs/DESIGN.md) §6.2                                |
-| uuid 每次变化        | 身份文件丢失或持久化失败（`identity.persistFailed` 指示降级）                                                                   |
-| 端口被占用           | `PORT=...` 指定其他端口；确认无遗留进程                                                                                         |
-
-## 文档导航
-
-| 文档                                     | 内容                                                                             |
-| ---------------------------------------- | -------------------------------------------------------------------------------- |
-| [docs/DESIGN.md](docs/DESIGN.md)         | 完整设计：状态清单、逐状态契约、信封、身份、接口、错误码、时序图、假设、测试计划 |
-| [docs/SPEC.md](docs/SPEC.md)             | 意图与需求原子清单                                                               |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md)       | 运行、安装、测试、部署与排障                                                     |
-| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | 验收门槛逐条对照表与证据                                                         |
-| [docs/BOARD.md](docs/BOARD.md)           | 看板派生层：缺口分析、符号化健康度、注意队列、实施路线（P0-P3 全部交付）        |
-| [CHANGELOG.md](CHANGELOG.md)             | 版本变更记录                                                                     |
-
-## 许可
-
-MIT。见 [LICENSE](LICENSE)。
+完整设计见主仓库 `docs/DESIGN.md`。
