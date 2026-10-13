@@ -28,17 +28,11 @@ async function freePort(): Promise<number> {
 }
 
 describe('server 入口 main()', () => {
-  it('启动 server、响应 SIGINT 优雅关闭并持久化注册表', async () => {
+  it('启动 server、响应 SIGINT 优雅关闭（注册表不落盘）', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-entry-'));
     const port = await freePort();
     const argv = process.argv;
-    process.argv = [
-      'node',
-      'src/index.ts',
-      `--port=${port}`,
-      '--host=127.0.0.1',
-      `--data-dir=${dir}`,
-    ];
+    process.argv = ['node', 'src/index.ts', `--port=${port}`, '--host=127.0.0.1'];
 
     const running = main();
     // 轮询健康端点（启动时间受机器/插桩负载影响，固定等待会时序脆弱）
@@ -56,8 +50,8 @@ describe('server 入口 main()', () => {
     expect(code).toBe(0);
     process.argv = argv;
 
-    // 优雅关闭已持久化注册表（空注册表快照）
-    expect(fs.existsSync(path.join(dir, 'agents.json'))).toBe(true);
+    // 注册表纯内存：关闭不落盘（不依赖机器状态：断言 main() 未向任何路径写出 agents.json）
+    expect(fs.existsSync(path.join(dir, 'agents.json'))).toBe(false);
   }, 20_000);
 });
 
@@ -72,7 +66,6 @@ describe('公共导出面（barrels）', () => {
     expect(servicesIndex.EVENT_STATES).toHaveLength(41);
     expect(typeof infraIndex.BoardHttpServer).toBe('function');
     expect(typeof infraIndex.HttpTransport).toBe('function');
-    expect(typeof infraIndex.FileRegistryStore).toBe('function');
     expect(typeof infraIndex.SimulatedStateSource).toBe('function');
     expect(typeof infraIndex.createAgentBoard).toBe('function');
   });

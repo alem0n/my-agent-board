@@ -16,7 +16,7 @@
 |---|---|---|---|
 | A 同机开发 | `pnpm dev`（127.0.0.1:7878） | `pi --extension ./extension/agent-board.ts` | 本仓库 |
 | B 独立 client 产物 | 任意主机 | `pnpm pack:client` → `pi install ./build/client` | client 自包含 15 模块、零运行时依赖 |
-| C 跨机部署 | 远端主机（`--port`/`--data-dir` 独立配置） | 配置文件 `url` 指向远端 | 协议为唯一耦合 |
+| C 跨机部署 | 远端主机（`--port`/`--host` 独立配置） | 配置文件 `url` 指向远端 | 协议为唯一耦合 |
 
 ```bash
 pnpm pack:client     # 生成 build/client/（入口 extension/agent-board.ts + client 模块闭包）
@@ -86,12 +86,12 @@ pnpm demo            # 或 make check 之后：bash scripts/demo.sh
 ### server
 
 ```bash
-pnpm dev                      # 默认 127.0.0.1:7878，数据目录 ./data
-pnpm dev -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=debug
+pnpm dev                      # 默认 127.0.0.1:7878
+pnpm dev -- --port=8099 --host=0.0.0.0 --log-level=debug
 pnpm dev -- --web             # 挂载内置 Web UI（GET / 与 /ui）
 ```
 
-参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。
+参数：`--port`、`--host`、`--log-level`、`--web`。
 
 `--web` 为开关参数（裸 `--web` 或 `--web=true/false`），默认关闭。启用后同一端口挂载内置
 Web UI 于 `GET /` 与 `/ui`：agent 列表（uuid/name/cwd/lastSeen/状态数/上报数）+ 单 agent
@@ -231,7 +231,7 @@ pnpm audit --prod  # 生产依赖审计
 
 | 现象 | 排查 |
 |---|---|
-| client 无上报 | 查看 `~/.pi/agent/agent-board-client.log` 的 `client.config.*` 与 `transport.unreachable`；`GET /v1/health` 验证 server |
-| server 无 agent | 确认 `data/agents.json` 损坏会以空注册表启动（`registryStore.loadFailed` 日志） |
+| client 无上报 | client 日志默认关闭（REQ-012）：先在配置文件设 `"logLevel": "info"` 或 `AGENT_BOARD_LOG_LEVEL=info` 复现，再看 `~/.pi/agent/agent-board-client.log` 的 `client.config.*` 与 `transport.unreachable`；`GET /v1/health` 验证 server |
+| server 无 agent | 预期内：注册表纯内存，server 重启即清空；等 client 首次上报（健康探测恢复后自动补投） |
 | 上报被拒 | `report.rejected` 日志含 code/state/field；对照 DESIGN.md §6.2 错误码表 |
 | uuid 变化 | 身份文件丢失或 server 重置；`identity.persistFailed` 日志指示持久化失败降级 |

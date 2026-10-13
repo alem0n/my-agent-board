@@ -11,7 +11,6 @@ import * as path from 'node:path';
 import { AgentRegistry } from '../src/services/registry.js';
 import { BoardHttpServer } from '../src/infrastructure/http-server.js';
 import { FileIdentityStore } from '../src/infrastructure/file-store.js';
-import { FileRegistryStore } from '../src/infrastructure/registry-file-store.js';
 import { HttpTransport } from '../src/infrastructure/http-client.js';
 import {
   SimulatedEnvironment,
@@ -30,10 +29,7 @@ let baseUrl: string;
 
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-e2e-'));
-  registry = new AgentRegistry(
-    new FileRegistryStore(path.join(dir, 'agents.json'), boardLogger),
-    boardLogger,
-  );
+  registry = new AgentRegistry(boardLogger);
   server = new BoardHttpServer({ host: '127.0.0.1', port: 0, registry, logger: boardLogger });
   const address = await server.start();
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -41,7 +37,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.stop();
-  registry.close();
 });
 
 function makeReporter(name?: string) {
@@ -224,6 +219,15 @@ describe('端到端：server 端契约校验与错误码', () => {
     expect((result.body as { error: { code: string } }).error.code).toBe('E_BATCH_TOO_LARGE');
   });
 
+  it('空批量返回 200 且 assigned:false（无 uuid 可采用）', async () => {
+    const result = await postJson('/v1/report/batch', { reports: [] });
+    expect(result.status).toBe(200);
+    const body = result.body as { ok: boolean; accepted: number; uuid: string; assigned: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.accepted).toBe(0);
+    expect(body.assigned).toBe(false);
+  });
+
   it('未知 agent 查询返回 404 + E_NOT_FOUND', async () => {
     const result = await getJson('/v1/agents/00000000-0000-0000-0000-000000000000');
     expect(result.status).toBe(404);
@@ -237,9 +241,38 @@ describe('端到端：server 端契约校验与错误码', () => {
     expect(method.status).toBe(405);
   });
 
+  it('DELETE /v1/agents/:uuid 删除条目（请求即授权，无本地研判）；不存在返回 404', async () => {
+    const { reporter } = makeReporter();
+    reporter.start();
+    await reporter.collectSnapshotAndFlush();
+    const uuid = reporter.currentIdentity!.uuid;
+    await reporter.stop();
+
+    const deleted = await fetch(`${baseUrl}/v1/agents/${uuid}`, { method: 'DELETE' });
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ uuid, deleted: true });
+
+    const after = await getJson(`/v1/agents/${uuid}`);
+    expect(after.status).toBe(404);
+
+    const again = await fetch(`${baseUrl}/v1/agents/${uuid}`, { method: 'DELETE' });
+    expect(again.status).toBe(404);
+
+    // history 路径不可删（属于只读资源）
+    const historyDelete = await fetch(`${baseUrl}/v1/agents/${uuid}/history`, {
+      method: 'DELETE',
+    });
+    expect(historyDelete.status).toBe(405);
+  });
+
   it('历史查询端点支持 state/limit/since，且非法 limit 被钳制', async () => {
-    const agents = (await getJson('/v1/agents')).body as { agents: Array<Record<string, unknown>> };
-    const uuid = agents.agents[0]!['uuid'] as string;
+    // 自建记录，不依赖前序用例留下的共享注册表状态（含 agent_settled）
+    const { reporter, source, env } = makeReporter();
+    reporter.start();
+    runAgentSimulation({ source, env });
+    await reporter.collectSnapshotAndFlush();
+    const uuid = reporter.currentIdentity!.uuid;
+    await reporter.stop();
     const history = (await getJson(`/v1/agents/${uuid}/history?state=agent_settled&limit=5`))
       .body as Record<string, unknown>;
     const entries = history['entries'] as Array<Record<string, unknown>>;

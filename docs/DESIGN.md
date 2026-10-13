@@ -15,7 +15,7 @@
 5. [身份方案](#5-身份方案)
 6. [接口、错误码与重连策略](#6-接口错误码与重连策略)
 7. [时序图](#7-时序图)
-8. [持久化与并发写入](#8-持久化与并发写入)
+8. [并发写入与 client 文件](#8-并发写入与-client-文件)
 9. [隐私设计](#9-隐私设计)
 10. [假设与待确认项](#10-假设与待确认项)
 11. [测试与验收计划](#11-测试与验收计划)
@@ -31,7 +31,7 @@
 | **client 扩展**（`extension/agent-board.ts` → `src/infrastructure/pi-extension.ts`） | 订阅 pi 全部受支持状态；映射为契约载荷；组信封；缓冲、重试、断线恢复、uuid 持久化 | 不渲染 UI（仅 `tui` 模式可选 `ui.notify`）；不修改会话内容 |
 | **传输层**（`src/infrastructure/http-client.ts`） | HTTP POST、超时、退避重试、健康探测 | 不解析契约（校验在 server） |
 | **server**（`src/index.ts` + `src/infrastructure/http-server.ts`） | 协议/契约校验、uuid 分配、注册表维护、聚合存储、查询 API | 不做 Web 前端；不做跨机编排 |
-| **持久化**（`src/infrastructure/file-store.ts`） | 注册表原子写、身份文件 | 不使用数据库 |
+| **client 文件存储**（`src/infrastructure/file-store.ts`） | 身份文件、日志（默认关闭） | 不使用数据库；server 注册表纯内存 |
 
 ### 1.2 分层（遵循 AGENTS.md §6）
 
@@ -56,7 +56,7 @@ pi 进程                                          board server 进程
 │  ├ adapter(订阅 pi)  │ ──────JSON over HTTP──▶ │  ├ 校验 envelope   │
 │  ├ Reporter(映射/缓冲)│ ◀──────{uuid,assigned}─ │  ├ 分配/校验 uuid   │
 │  ├ HttpTransport     │                         │  ├ Registry 聚合    │
-│  └ identity          │   GET /v1/agents...      │  └ FileStore 持久化│
+│  └ identity          │   GET /v1/agents...      │  └ Registry(纯内存)│
 └──────────────────────┘ ──────────────────────▶ └────────────────────┘
 ```
 
@@ -67,7 +67,7 @@ pi 进程                                          board server 进程
 | 依赖 | 类型 | 理由 |
 |---|---|---|
 | `pino` | 运行时（模板已有） | Node 环境性能最优的结构化日志（AGENTS.md §4 指定） |
-| `node:http` / `node:crypto` / `node:fs` / `node:path` | 内置 | 零依赖 HTTP server / uuid / 文件持久化 |
+| `node:http` / `node:crypto` / `node:fs` / `node:path` | 内置 | 零依赖 HTTP server / uuid / client 侧文件 IO |
 | 全局 `fetch`（Node ≥ 22） | 内置 | client 上报，无需 axios |
 | `@earendil-works/pi-coding-agent` | dev（仅类型） | 扩展类型声明；`import type` 编译期消除，无运行时依赖 |
 | vitest / eslint / prettier / dependency-cruiser / tsx | dev | 模板既有门禁工具 |
@@ -100,7 +100,7 @@ pi 进程                                          board server 进程
 ```
 拓扑 A 同机开发：  pi --extension ./extension/agent-board.ts  +  pnpm dev（127.0.0.1:7878）
 拓扑 B 独立 client 产物：pi install ./build/client           +  远端 server（url 指向）
-拓扑 C 跨机：     client 配置 url 指向 server 主机；server 数据目录与端口独立配置
+拓扑 C 跨机：     client 配置 url 指向 server 主机；server 端口/host 独立配置
 ```
 
 跨机时 client 配置文件（`~/.pi/agent/agent-board-server.json` 的 `url`）或环境变量
@@ -322,26 +322,22 @@ interface StateContract {
 | `agent.name` | 配置文件 `name`；**未设置/空 → 回退当前 session id**（`ctx.sessionManager.getSessionId()`）；两者皆无 → 丢弃该条上报并 `warn` 日志（不静默） | 每条信封必带 | 变化时**保留 uuid**，更新注册表 name，追加 `identity_change` 历史 |
 | `agent.cwd` | `ctx.cwd` | 每条信封必带 | 同上（字段=cwd） |
 | `agent.sessionId` | `ctx.sessionManager.getSessionId()` | 可采集时携带 | 每条上报覆盖注册表 current sessionId（不带则保留旧值） |
-| `agent.uuid` | **server 分配**（`crypto.randomUUID()`）首次通信返回；client 持久化 `~/.pi/agent/agent-board-identity.json` | 持久化后每条携带 | 未知于 server → server 改分配新 uuid 并返回 `replaced:true`，client 采用并覆盖持久化 |
+| `agent.uuid` | **client 请求携带即被信任**；未携带时 server 为请求分配（`crypto.randomUUID()`） | 持久化后每条携带；加载完成前入队的信封发送时补盖 | 身份由 client 持续携带；server 不研判，孤儿条目由 `DELETE /v1/agents/:uuid` 治理 |
 | `agent.piVersion` | 扩展注入（`process.env.PI_VERSION` 或硬编码包版本） | 可选携带 | — |
 
-### 5.2 uuid 分配规则（server 权威，防重复）
+### 5.2 uuid 信任规则（client 请求为信任来源，server 不研判）
 
-收到信封时按优先级：
+- **信任模型**：`agent.uuid` 由 client 请求携带，server 不做本地研判——不按 (name, cwd, sessionId) 匹配（无 sticky），也不替换未知 uuid（无 replaced）。
+- 携带 uuid → 直接使用：记录不存在则按该 uuid 建立，`assigned=false`。
+- 未携带 uuid → server 为请求分配一个 uuid（单信封=该信封；批量=整批共用首个 uuid，见 §6.3），`assigned=true`，client 采用并持久化。
+- 重复/孤儿条目（client 身份丢失、uuid 弃用等）由 `DELETE /v1/agents/:uuid` 显式治理；server 不自行研判合并。
+- `crypto.randomUUID()` 保证全局唯一；注册表为纯内存，单进程内操作天生串行（§8）。
 
-1. `agent.uuid` 存在且在注册表 → 复用，`assigned=false`。
-2. `agent.uuid` 存在但不在注册表（含格式非法） → **分配新 uuid**，`assigned=true, replaced=true`（不信任客户端未知 uuid —— 最小安全校验）。
-3. `agent.uuid` 缺省：
-   - 注册表中存在 (name, cwd, sessionId) 三者全同的记录 → 复用其 uuid（同进程重复注册不产生重复 uuid）。
-   - 否则分配新 uuid，`assigned=true`。
-
-`crypto.randomUUID()` 保证全局唯一；并发分配以注册表串行写队列序列化（§8）。
-
-### 5.3 持久化与降级
+### 5.3 client 身份文件与降级
 
 - 身份文件路径：`~/.pi/agent/agent-board-identity.json`，内容 `{ uuid, assignedAt, serverUrl }`。
-- 原子写（tmp + rename）；写入失败 → `error` 日志（含路径与原因）→ 降级为"不持久化"：每次会话由 server 分配 uuid（该 agent 的历史会按 sessionId 粘连复用，见 §5.2 规则 3，但跨会话不保证同 uuid）。降级明确记录，不静默。
-- 首次通信成功获得 uuid 后立即持久化；后续携带；server 返回 `replaced:true` 时覆盖持久化。
+- 原子写（tmp + rename）；写入失败 → `error` 日志（含路径与原因）→ 降级为"不持久化"：每次会话由 server 分配新 uuid，产生重复条目（由 DELETE 治理）。降级明确记录，不静默。
+- 首次通信成功获得 uuid 后立即持久化；后续携带；client 身份异步加载完成前入队的信封在发送时补盖 uuid（`runDrain`）。
 
 ### 5.4 name/cwd 变化处理（明确规则）
 
@@ -361,9 +357,10 @@ server 端查询 API 永远返回当前值 + 可查变化历史。
 
 | 方法 | 路径 | 请求 | 成功响应 |
 |---|---|---|---|
-| POST | `/v1/report` | 单信封 | `200 { ok:true, uuid, assigned:boolean, replaced?:boolean }` |
-| POST | `/v1/report/batch` | `{ reports: Envelope[] }`（≤512 条，body ≤4MB） | `200 { ok:true, accepted:n, uuid, assigned, rejected:[{index,code,message,state?}] }`（原子批：非法信封所在批次整体拒绝并逐条返回；client 剔除被拒条目后重试剩余） |
+| POST | `/v1/report` | 单信封 | `200 { ok:true, uuid, assigned:boolean }` |
+| POST | `/v1/report/batch` | `{ reports: Envelope[] }`（≤512 条，body ≤4MB） | `200 { ok:true, accepted:n, uuid, assigned, rejected:[{index,code,message,state?}] }`（原子批：非法信封所在批次整体拒绝并逐条返回；client 剔除被拒条目后重试剩余；无 uuid 批量的信封共用本批首个 uuid，assigned 为请求级） |
 | GET | `/v1/agents` | — | `200 { agents:[{uuid,name,cwd,sessionId,firstSeen,lastSeen,reportCount,stateCount}] }` |
+| DELETE | `/v1/agents/:uuid` | — | `200 { uuid, deleted:true }`；不存在 → `404 E_NOT_FOUND`。治理操作：请求即授权，server 不做本地研判 |
 | GET | `/v1/agents/:uuid` | — | `200 { …注册表当前值…, latest: Record<StateId,{timestamp,payload}> }` |
 | GET | `/v1/agents/:uuid/history` | `?state=&limit=≤1000&since=epoch ms` | `200 { uuid, state?, entries:[HistoryEntry], truncated:boolean }` |
 | GET | `/v1/health` | — | `200 { status:"ok", protocolVersion:"1", agents:n, uptimeMs }` |
@@ -382,7 +379,7 @@ server 端查询 API 永远返回当前值 + 可查变化历史。
 | `E_AGENT_IDENTITY` | 400 | name/cwd 缺失或非法 |
 | `E_BATCH_TOO_LARGE` | 413 | 批量超过 512 条或 body >4MB |
 | `E_NOT_FOUND` | 404 | 路径或 uuid 不存在 |
-| `E_METHOD_NOT_ALLOWED` | 405 | 非 GET/POST |
+| `E_METHOD_NOT_ALLOWED` | 405 | 非该路径允许的方法（DELETE 仅允许 `/v1/agents/:uuid`） |
 | `E_INTERNAL` | 500 | 服务器内部错误 |
 
 ### 6.3 重连与重试策略（client）
@@ -410,10 +407,12 @@ client(pi 扩展)                    server
     │                                │
     │ session_start → 采集           │
     │ 申请 uuid: 报告(无 uuid) ────▶ │ 校验信封/契约
-    │                                │ 分配 uuid=U1，持久化注册表
+    │                                │ 分配 uuid=U1，内存注册表
     │ ◀──────── {ok,uuid:U1,assigned:true}
     │ 持久化 identity.json           │
-    │ 后续报告(uuid=U1) ───────────▶ │ 复用 U1，更新 lastSeen
+    │ 后续报告(uuid=U1) ───────────▶ │ 信任 U1，更新 lastSeen
+    │ identity 丢失(无 uuid) ────▶  │ 新分配 U2（不研判；旧 U1 由 DELETE 治理）
+    │ ◀── {ok,uuid:U2,assigned:true} │
     │ ◀──────── {ok,uuid:U1,assigned:false}
 ```
 
@@ -444,7 +443,7 @@ client                              server
 
 ---
 
-## 8. 持久化与并发写入
+## 8. 并发写入与 client 文件
 
 ### 8.1 性能约束：client 全异步（不阻塞 pi 主线程）
 
@@ -457,14 +456,11 @@ client                              server
 - 静态守护：`tests/async-io.spec.ts` 扫描 client 源文件，出现 `fs.*Sync(` 即失败；
   并断言 client 执行路径不导入 server 同步存储模块。
 
-### 8.2 server 注册表（独立进程，同步写为记录的权衡）
+### 8.2 server 注册表（纯内存）
 
-- 格式：单个 JSON 文件（默认 `data/agents.json`）：`{ "version": 1, "agents": { uuid: AgentRecord } }`。
-- 实现位于 `infrastructure/registry-file-store.ts`，使用同步 IO：server 是独立专用进程，
-  注册表写由去抖合并与关闭最终写触发，单次同步写仅短暂阻塞本进程的 HTTP 循环，
-  且换取简单的单线程串行语义（无异步交错与写竞争）；与 client 分模块隔离（假设 A11）。
-- 启动加载：文件缺失 → 空注册表（非错误，info 日志）；JSON 损坏 → `error` 日志 + 空注册表启动（保守丢弃，明确日志，不退出）。
-- 写盘策略：去抖合并（默认 250ms 内多次变更合并一次写）+ 关闭时强制最终写。
+- 注册表只存在于内存（`AgentRegistry`）：**不写盘、无 `--data-dir`、无 `agents.json`**，进程退出即清空。
+- 动机：监控状态持续刷新，服务端状态无离线保留价值；同时消除文件 IO、损坏面与同步写。
+- JS 单线程保证注册表操作的串行语义（无并发写竞争）。
 
 ### 8.3 client 文件
 
@@ -491,16 +487,16 @@ client                              server
 | # | 假设 | 保守选择 | 影响 |
 |---|---|---|---|
 | A1 | "全部受支持状态"的确切口径未在任务中定义 | = 手册中扩展可订阅的 41 事件 + 1 上下文快照（`ExtensionContext` 全部可采样字段） | 若口径还应包含 MCP/会话文件内的其他状态，需另增（当前不编造） |
-| A2 | server 是否需要跨进程/跨机集群 | 单进程、本地文件存储 | 满足范围内"本地可运行" |
+| A2 | server 是否需要跨进程/跨机集群 | 单进程、纯内存注册表 | 满足范围内"本地可运行" |
 | A3 | 同一 (name,cwd) 多个并行 pi 会话是否应合并为一个 agent | **不合并**（uuid 按客户端持久化身份区分） | 并行同目录会话各自独立 |
-| A4 | 客户端未知 uuid 是否可信 | 不可信，server 改分配（最小安全校验） | server 重启后老 uuid 不复活 |
+| A4 | 客户端未知 uuid 是否可信 | 可信：请求即信任（信封格式校验后，见 §5.2） | server 重启后 client 持旧 uuid 上报仍命中同一条目；孤儿/重复条目由 DELETE 治理 |
 | A5 | 内容字段（prompt/命令/参数）是否上报 | 不上报，仅元数据 | 牺牲细粒度换隐私 |
-| A6 | 协议是否需要鉴权 | 不需要（本地假定可信网络），仅保留 §A4 的 uuid 校验 | 生产环境需另加 |
+| A6 | 协议是否需要鉴权 | 不需要（本地假定可信网络）：上报仅校验信封格式，DELETE 请求即授权 | 生产环境需另加（置于前置代理） |
 | A7 | pi 扩展运行在无 pino 的 pi 进程内 | 扩展使用自实现 JSON 行文件日志器（满足 `BoardLogger` 端口） | 扩展零运行时依赖 |
 | A8 | 批量上报中部分非法时的语义 | 原子批拒绝 + client 剔除重试（§6.3 毒信处理） | 防毒信阻塞缓冲 |
-| A9 | server 重启后注册表是否保留 | 持久化到 JSON（默认 250ms 去抖写） | 极端崩溃可能丢失 ≤250ms 变更 |
+| A9 | server 重启后注册表是否保留 | 不保留：注册表纯内存，重启即清空 | 监控状态持续刷新，服务端状态无离线保留价值 |
 | A10 | 报告时间戳上限 | 超前 ≤60s、落后 ≤7 天 | 仅内存重试，离线窗口由恢复后的新采集覆盖 |
-| A11 | client 与 server 是否共享文件存储实现 | 不共享：client 全异步（pi 交互进程不可阻塞主线程），server 同步写（独立进程、去抖合并，简单串行语义） | 两模块分文件隔离并有静态守护测试 |
+| A11 | client 与 server 是否共享文件存储实现 | 不共享：client 全异步（pi 交互进程不可阻塞主线程）；server 无文件存储（纯内存） | client 有静态守护测试 |
 
 **待确认项**：部署拓扑（单机/集群）、是否需要鉴权、`agent_snapshot` 采样频率业务预期值、状态内容字段是否需要可配置放开（当前无条件不上报）。
 
@@ -514,7 +510,7 @@ client                              server
 |---|---|
 | 1 状态覆盖 | `contracts.spec.ts`：硬编码手册 fixture（42 项）与 `STATE_REGISTRY` 双向集合比对 |
 | 2 契约完整 | `contracts.spec.ts`：逐状态合法样本通过 + 非法变异（缺必填/类型错/超范围/非法枚举）拒绝；`mapper` 覆盖断言（42 状态皆有映射器） |
-| 3 身份正确 | `identity.spec.ts`：name 缺失回退 session id；首报分配并持久化 uuid；重复注册不产生重复 uuid（同 uuid / 同进程身份两条路径）；persist 失败降级日志；name/cwd 变化保留 uuid + `identity_change` 历史 |
+| 3 身份正确 | `identity.spec.ts`：name 缺失回退 session id；首报分配并持久化 uuid；携带即信任（未知 uuid 按该 uuid 建立）；server 重启后旧 uuid 复用；DELETE 治理；persist 失败降级日志；name/cwd 变化保留 uuid + `identity_change` 历史 |
 | 4 配置正确 | `config.spec.ts`：合法（url / host+port / 全字段）；缺失文件；JSON 非法；逐字段非法；未知键告警 |
 | 5 可运行 | `scripts/demo.sh`（`pnpm demo`）：启动 server + 模拟 client，42 状态全覆盖，打印 agent 列表与历史 |
 | 6 测试 | `pnpm test` 100% 通过；四类必备测试 + e2e（真实 HTTP server + 真实 client 库）；`make check` 全绿（lint/typecheck/format/coverage/audit） |
@@ -525,10 +521,10 @@ client                              server
 | 测试文件 | 覆盖类别 | 关键用例 |
 |---|---|---|
 | `tests/contracts.spec.ts` | 契约校验 / 状态覆盖 | 注册表完整性、信封合法/非法、42 状态×(合法+≥1 非法变异)、未知状态、枚举/范围边界 |
-| `tests/identity.spec.ts` | 身份分配 | 首报分配、持久化、复用、同身份粘连、replaced 路径、name/cwd 变化、身份文件写失败降级 |
+| `tests/identity.spec.ts` | 身份分配 | 首报分配、持久化、复用、携带即信任、server 重启旧 uuid 可用、DELETE 治理、name/cwd 变化、身份文件写失败降级 |
 | `tests/config.spec.ts` | 配置解析 | 6 类配置场景与降级 |
 | `tests/transport.spec.ts` | 重连重试 | 退避序列、重试耗尽保留缓冲、恢复后 flush、溢出丢弃、毒信剔除 |
-| `tests/registry.spec.ts` | 聚合存储 | latest 聚合、历史上限截断、查询 API、持久化往返 |
+| `tests/registry.spec.ts` | 聚合存储 | latest 聚合、历史上限截断、查询 API |
 | `tests/e2e.spec.ts` | 端到端 | 真实 server + 真实 Reporter（模拟适配器）→ 42 状态全部到达、uuid 流、history 查询、部分拒绝 |
 | `tests/mapper.spec.ts` | 映射正确性 | 42 状态映射器存在 + 输出契约合法（含隐私约束：无原文字段） |
 ```

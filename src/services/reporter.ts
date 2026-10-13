@@ -391,10 +391,15 @@ export class Reporter {
     const retry = shutdown ? { ...this.deps.config.retry, maxAttempts: 1 } : this.deps.config.retry;
     let sent = 0;
     while (this.buffer.length > 0 && (shutdown || (this.running && this.reachable))) {
-      const batch = this.buffer.splice(
-        0,
-        Math.min(this.batchSizeLimit, MAX_BATCH, this.buffer.length),
-      );
+      const batch = this.buffer
+        .splice(0, Math.min(this.batchSizeLimit, MAX_BATCH, this.buffer.length))
+        // 发送时补盖身份 uuid：身份为异步加载，加载完成前入队的信封此时补上
+        // （server 信任请求携带的 uuid，补盖后无需 server 侧研判）。
+        .map((envelope) =>
+          envelope.agent.uuid === undefined && this.identity !== null
+            ? { ...envelope, agent: { ...envelope.agent, uuid: this.identity.uuid } }
+            : envelope,
+        );
       const outcome = await retryWithBackoff(() => this.deps.transport.postBatch(batch), retry, {
         sleep: this.sleepFn,
         random: this.randomFn,
@@ -565,11 +570,7 @@ export class Reporter {
     if (!response.assigned) {
       return;
     }
-    if (
-      this.identity !== null &&
-      this.identity.uuid === response.uuid &&
-      response.replaced !== true
-    ) {
+    if (this.identity !== null && this.identity.uuid === response.uuid) {
       return;
     }
     const next: PersistedIdentity = {
@@ -583,10 +584,7 @@ export class Reporter {
     const result = await write;
     if (result.ok) {
       this.identity = next;
-      this.deps.logger.info('identity.persisted', {
-        uuid: next.uuid,
-        replaced: response.replaced === true,
-      });
+      this.deps.logger.info('identity.persisted', { uuid: next.uuid });
     } else {
       this.identity = next;
       this.deps.logger.error('identity.persistFailed', {

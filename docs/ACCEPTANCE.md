@@ -47,11 +47,11 @@
 - `resolveIdentity`：name 未设置/空白 → 回退 session id；两者皆无 → 明确失败原因（不静默）；
 - 首次通信（无 uuid）：server 分配 v4 uuid 并返回；client 持久化到
   `agent-board-identity.json`（原子写，`tests/identity.spec.ts` 往返断言）；
-- 重复注册不产生重复 uuid 的三条路径均有用例：
+- uuid 处理的三条路径均有用例：
   - 携带已注册 uuid → 复用（`assigned: false`，注册表仅 1 条）；
-  - 同进程同身份（name+cwd+sessionId）无 uuid 再注册 → 粘连复用；
-  - server 重启后注册表从持久化加载 → 既有 uuid 复用；
-- 客户端未知 uuid 不被信任（`replaced` 路径，最小安全校验）；
+  - 无 uuid 的请求 → 分配新 uuid（`assigned:true`，重复条目由 DELETE 治理，见下条）；
+  - client 携带的 uuid 被信任（记录不存在则按该 uuid 建立）；
+- server 不做身份研判（无 sticky / 无 replaced），孤儿或重复条目由 `DELETE /v1/agents/:uuid` 显式删除（不存在返回 404）；
 - 持久化失败（权限/非目录父路径）→ `identity.persistFailed` 错误日志 + 仅内存降级
   （`tests/transport.spec.ts`）；
 - name/cwd 变化：保留 uuid、更新注册信息、追加 `identity_change` 历史条目；
@@ -104,7 +104,7 @@
 
 **证据**：
 
-- **149 / 149 用例通过**（13 个测试文件），`pnpm run test:coverage` 达 80% 阈值
+- **测试全绿**（当前 171 用例 / 16 个 spec 文件，随变更增长），`pnpm run test:coverage` 达 80% 阈值
   （lines/statements/branches/functions 全部达标），`make check` 全绿（lint + typecheck +
   format + 覆盖率 + `pnpm audit --prod` 无漏洞）；
 - 四类必备测试齐备：
@@ -152,9 +152,9 @@
 | 1c 每次上报携带 name 与 cwd | `ReportEnvelope.agent`（`src/domain/contracts.ts`），Reporter 组装 | contracts / e2e |
 | 1d name 缺失回退 session id | `src/domain/identity.ts` | identity |
 | 1e uuid 分配与持久化、失败降级 | `src/services/registry.ts` + `FileIdentityStore` | identity / transport |
-| 1f 断线重连 / 重试退避 / 本地缓冲 | `src/services/retry.ts` + `src/services/reporter.ts` + `JsonlOutboxStore` | transport |
+| 1f 断线重连 / 重试退避 / 本地缓冲（内存，不落盘） | `src/services/retry.ts` + `src/services/reporter.ts` | transport |
 | 2a 端点、协议与契约校验、错误码 | `src/infrastructure/http-server.ts` + `src/domain/validation.ts` | e2e / errors |
-| 2b uuid 分配与注册表 | `src/services/registry.ts` + `FileRegistryStore` | identity / registry |
+| 2b uuid 分配与注册表 | `src/services/registry.ts`（纯内存） | identity / registry |
 | 2c 按 uuid 聚合最新与历史 | `AgentRegistry.get/history` + 查询 API | registry / e2e |
 | 2d name/cwd 变化规则 | 保留 uuid + 更新 + `identity_change` 历史 | identity |
 | 3 契约独立演进、协议版本号 | `PROTOCOL_VERSION` + 逐状态 semver + 加法式注册表 | contracts |

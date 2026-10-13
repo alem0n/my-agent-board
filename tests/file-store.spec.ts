@@ -1,15 +1,10 @@
 /**
- * 文件持久化测试：原子写与损坏文件降级。
+ * client 侧文件持久化测试：异步原子写与降级。
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import {
-  FileRegistryStore,
-  writeJsonAtomic,
-  readJsonFile,
-} from '../src/infrastructure/registry-file-store.js';
 import {
   FileIdentityStore,
   SerialFileWriter,
@@ -22,27 +17,6 @@ let dir: string;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-fs-'));
-});
-
-describe('writeJsonAtomic / readJsonFile', () => {
-  it('写入可读回，且创建嵌套目录', async () => {
-    const file = path.join(dir, 'a', 'b', 'x.json');
-    writeJsonAtomic(file, { v: 1 });
-    expect(readJsonFile(file)).toEqual({ v: 1 });
-  });
-
-  it('文件缺失返回 null；损坏 JSON 抛错', async () => {
-    expect(readJsonFile(path.join(dir, 'missing.json'))).toBe(null);
-    const file = path.join(dir, 'broken.json');
-    fs.writeFileSync(file, '{oops');
-    expect(() => readJsonFile(file)).toThrow();
-  });
-
-  it('原子写不残留临时文件', async () => {
-    const file = path.join(dir, 'x.json');
-    writeJsonAtomic(file, { v: 2 });
-    expect(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
-  });
 });
 
 describe('client 侧异步工具', () => {
@@ -80,47 +54,6 @@ describe('client 侧异步工具', () => {
     await expect(failing).rejects.toThrow('boom');
     await ok;
     expect(calls).toBe(2);
-  });
-});
-
-describe('FileRegistryStore', () => {
-  it('损坏快照：记录错误并以空注册表启动（不抛、不静默）', async () => {
-    const errorMessages: string[] = [];
-    const logger = { ...silentLogger, error: (msg: string) => errorMessages.push(msg) };
-    const file = path.join(dir, 'agents.json');
-    fs.writeFileSync(file, 'corrupt');
-    const store = new FileRegistryStore(file, logger);
-    expect(await store.load()).toBe(null);
-    expect(errorMessages.some((msg) => msg === 'registryStore.loadFailed')).toBe(true);
-  });
-
-  it('结构不合法的快照同样降级', async () => {
-    const file = path.join(dir, 'agents.json');
-    fs.writeFileSync(file, JSON.stringify({ wrong: true }));
-    expect(await new FileRegistryStore(file, silentLogger).load()).toBe(null);
-  });
-
-  it('合法快照往返', async () => {
-    const file = path.join(dir, 'agents.json');
-    const store = new FileRegistryStore(file, silentLogger);
-    store.save({
-      version: 1,
-      agents: {
-        u1: {
-          uuid: 'u1',
-          name: 'a',
-          cwd: '/c',
-          sessionId: 's',
-          firstSeen: 1,
-          lastSeen: 2,
-          reportCount: 3,
-          protocolVersion: '1',
-          latest: {},
-          history: [],
-        },
-      },
-    });
-    expect((await store.load())?.agents['u1']?.reportCount).toBe(3);
   });
 });
 

@@ -23,7 +23,6 @@ export const SERVER_MODULES = [
   'src/config.ts',
   'src/logger.ts',
   'src/infrastructure/http-server.ts',
-  'src/infrastructure/registry-file-store.ts',
   'src/infrastructure/index.ts',
   'src/services/registry.ts',
   'src/services/index.ts',

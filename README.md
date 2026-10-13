@@ -60,12 +60,12 @@ KEEP_DATA=1 pnpm demo
 ### 1. 启动 server
 
 ```bash
-pnpm dev          # 默认 127.0.0.1:7878，数据目录 ./data
-pnpm dev -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=debug
+pnpm dev          # 默认 127.0.0.1:7878
+pnpm dev -- --port=8099 --host=0.0.0.0 --log-level=debug
 pnpm dev -- --web      # 挂载内置 Web UI（GET / 与 /ui）
 ```
 
-参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。非法值自动回退默认并记录日志。
+参数：`--port`、`--host`、`--log-level`、`--web`（值参数支持 `--port=8099` 与 `--port 8099` 两种形式）。非法值自动回退默认并记录日志。
 
 Web UI 为**开关参数、默认关闭**：你需要可视化时加 `--web`（同端口 `/` 与 `/ui`，自动刷新 3s，零外部资源）；想用自己的可视化（Grafana、自写面板……）时不开即可，直接消费 `/v1/*` JSON API。
 
@@ -88,7 +88,7 @@ curl http://127.0.0.1:7878/v1/agents | jq '.agents[] | {uuid, name, stateCount, 
 curl "http://127.0.0.1:7878/v1/agents/<uuid>/history?state=agent_snapshot&limit=5"
 ```
 
-注册表持久化为 `--data-dir` 下的 `agents.json`（原子写 + 去抖合并）。
+注册表为纯内存：进程内聚合、不写盘，重启即清空（监控状态持续刷新，无离线保留价值）。
 
 ### 3. 安装 client 插件
 
@@ -254,8 +254,8 @@ pnpm pack:client      # 生成 build/client/（15 个模块、零运行时依赖
 
 | 现象                 | 排查                                                                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| client 无上报        | 查看 `~/.pi/agent/agent-board-client.log` 中的 `client.config.*` 与 `transport.unreachable`                                     |
-| server 无 agent 记录 | `GET /v1/health` 确认存活；检查 `--data-dir` 下 `agents.json` 是否损坏（损坏时以空注册表启动并记录 `registryStore.loadFailed`） |
+| client 无上报        | client 日志默认关闭：先设 `"logLevel": "info"` 或 `AGENT_BOARD_LOG_LEVEL=info`，再查 `agent-board-client.log` 的 `client.config.*` 与 `transport.unreachable` |
+| server 无 agent 记录 | 预期内：注册表纯内存，server 重启即清空；等待 client 首次上报 |
 | 上报被拒绝           | client 日志 `report.rejected` 含 code 与字段；错误码对照 [`docs/DESIGN.md`](docs/DESIGN.md) §6.2                                |
 | uuid 每次变化        | 身份文件丢失或持久化失败（`identity.persistFailed` 指示降级）                                                                   |
 | 端口被占用           | `PORT=...` 指定其他端口；确认无遗留进程                                                                                         |

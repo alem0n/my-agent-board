@@ -12,10 +12,12 @@ npm start                 # node dist/src/index.js，默认 127.0.0.1:7878
 参数示例（**注意 `--` 分隔符不可省**：npm 靠它把参数透传给启动脚本，缺了会被 npm 吞掉）：
 
 ```bash
-npm start -- --port=8099 --host=0.0.0.0 --data-dir=/var/lib/agent-board --log-level=info
+npm start -- --port=8099 --host=0.0.0.0 --log-level=info
 ```
 
-参数：`--port`、`--host`、`--data-dir`、`--log-level`、`--web`。注册表持久化为数据目录下的 `agents.json`（原子写 + 去抖合并）。
+参数：`--port`、`--host`、`--log-level`、`--web`（值参数同时支持 `--port=8099` 与 `--port 8099` 两种形式）。
+
+**注册表为纯内存**：进程内聚合，不写盘、无数据目录，重启即清空——监控状态持续刷新，服务端状态无离线保留价值。
 
 ## 内置 Web UI（可选）
 

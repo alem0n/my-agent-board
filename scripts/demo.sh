@@ -29,9 +29,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[demo] starting server on ${SERVER_URL} (data: ${DATA_DIR})"
+echo "[demo] starting server on ${SERVER_URL}（注册表纯内存；data dir 仅存日志与 client 配置）"
 cd "${ROOT}"
-exec node --import tsx src/index.ts --host="${HOST}" --port="${PORT}" --data-dir="${DATA_DIR}" \
+exec node --import tsx src/index.ts --host="${HOST}" --port="${PORT}" \
   >"${DATA_DIR}/server.log" 2>&1 &
 SERVER_PID=$!
 

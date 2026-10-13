@@ -32,12 +32,6 @@ export interface AgentRecord {
   history: HistoryEntry[];
 }
 
-/** 持久化快照。 */
-export interface RegistrySnapshot {
-  version: number;
-  agents: Record<string, AgentRecord>;
-}
-
 /** 列表查询摘要。 */
 export interface AgentSummary {
   uuid: string;
@@ -64,10 +58,4 @@ export interface HistoryResult {
   entries: HistoryEntry[];
   /** 结果因 limit/since 截断（区别于环形存档截断）。 */
   truncated: boolean;
-}
-
-/** 注册表持久化端口（实现在 infrastructure 层）。 */
-export interface RegistryStore {
-  load(): RegistrySnapshot | null;
-  save(snapshot: RegistrySnapshot): void;
 }

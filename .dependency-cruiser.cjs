@@ -36,7 +36,7 @@ module.exports = {
         path: '^(src/domain/|src/services/(reporter|mapper|retry)\\.ts|src/infrastructure/(pi-extension|file-store|http-client|client-config-loader)\\.ts)',
       },
       to: {
-        path: '^(src/(index|simulate|config|logger)\\.ts|src/infrastructure/(http-server|registry-file-store|index)\\.ts|src/services/(registry|index)\\.ts)$',
+        path: '^(src/(index|simulate|config|logger)\\.ts|src/infrastructure/(http-server|index)\\.ts|src/services/(registry|index)\\.ts)$',
       },
     },
     {

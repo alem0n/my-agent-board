@@ -12,10 +12,12 @@
  *   GET  /v1/agents              agent 列表
  *   GET  /v1/agents/:uuid        单 agent 注册记录 + 逐状态最新载荷
  *   GET  /v1/agents/:uuid/history?state=&limit=&since=   历史记录
+ *   DELETE /v1/agents/:uuid      删除 agent 条目（治理操作：请求即授权，无本地研判）
  *   GET  /v1/health              健康检查
  *   GET  / 或 /ui                内置 Web UI（仅 --web 启用时；否则 404）
  */
 import * as http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { WEB_UI_HTML } from './web-ui-asset.js';
 import type { AgentRegistry } from '../services/registry.js';
 import type { BoardLogger } from '../domain/logging.js';
@@ -145,6 +147,20 @@ export class BoardHttpServer {
         this.writeJson(response, result.status, result.body);
         return;
       }
+      if (agentMatch !== null && method === 'DELETE') {
+        const uuid = decodeURIComponent(agentMatch[1] ?? '');
+        const deleted = this.registry.delete(uuid);
+        if (!deleted) {
+          this.writeJson(
+            response,
+            404,
+            this.errorBody(ERROR_CODES.NOT_FOUND, `agent ${uuid} not found`),
+          );
+          return;
+        }
+        this.writeJson(response, 200, { uuid, deleted: true });
+        return;
+      }
       const historyMatch = /^\/v1\/agents\/([^/]+)\/history$/.exec(path);
       if (historyMatch !== null && method === 'GET') {
         const result = this.agentHistory(decodeURIComponent(historyMatch[1] ?? ''), url);
@@ -159,7 +175,9 @@ export class BoardHttpServer {
         path === '/v1/report' ||
         path === '/v1/report/batch' ||
         /^\/v1\/agents\/[^/]+(\/history)?$/.test(path);
-      if (knownPath && method !== 'GET' && method !== 'POST') {
+      const deleteOnAgent =
+        method === 'DELETE' && /^\/v1\/agents\/[^/]+$/.test(path) && !path.endsWith('/history');
+      if (knownPath && method !== 'GET' && method !== 'POST' && !deleteOnAgent) {
         this.writeJson(
           response,
           405,
@@ -210,7 +228,6 @@ export class BoardHttpServer {
         ok: true,
         uuid: ingest.uuid,
         assigned: ingest.assigned,
-        ...(ingest.replaced ? { replaced: true } : {}),
       },
     };
   }
@@ -271,17 +288,28 @@ export class BoardHttpServer {
       return { status: 400, body: { ok: false, rejected } };
     }
 
+    // 以请求为信任单位：无 uuid 的信封共用本批首个 uuid（首信封携带则沿用，否则生成一次）。
+    // server 不做身份研判（无 sticky）：身份由 client 在后续请求中持续携带该 uuid。
+    const firstUuid = valid[0]?.agent.uuid;
+    const requestUuid = firstUuid ?? randomUUID();
+    const assignedByServer = firstUuid === undefined;
+    const stamped = valid.map((envelope) =>
+      envelope.agent.uuid === undefined
+        ? { ...envelope, agent: { ...envelope.agent, uuid: requestUuid } }
+        : envelope,
+    );
+
     let uuid = '';
-    let assigned = false;
-    let replaced = false;
+    // 请求级 assigned：本批 uuid 由 server 生成时 client 需采用（stamp 后信封均携带 uuid，逐条 ingest 不再为 true）。
+    // 空批量无 uuid 可采用：assigned=false（client 解析层要求 uuid 非空）。
+    let assigned = valid.length > 0 && assignedByServer;
     let accepted = 0;
-    for (const envelope of valid) {
+    for (const envelope of stamped) {
       const ingest = this.registry.ingest(envelope, this.options.now());
       if (uuid === '') {
         uuid = ingest.uuid;
       }
       assigned = assigned || ingest.assigned;
-      replaced = replaced || ingest.replaced;
       accepted += 1;
     }
     return {
@@ -291,7 +319,6 @@ export class BoardHttpServer {
         accepted,
         uuid,
         assigned,
-        ...(replaced ? { replaced: true } : {}),
       },
     };
   }

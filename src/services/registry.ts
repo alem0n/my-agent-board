@@ -2,11 +2,12 @@
  * AgentRegistry：server 侧 uuid 分配、注册表维护与聚合查询（services 层）。
  *
  * 职责契约：
- * - ingest() 为唯一写入入口：uuid 权威分配（未知客户端 uuid 不被信任）、
- *   身份变化检测、latest 聚合、历史上限、去抖持久化。
- * - 全部方法对内存模型同步操作（JS 单线程天然串行）；持久化经串行写队列。
- * - 不直接访问 IO：通过 RegistryStore 端口。
- * 设计文档：docs/DESIGN.md §5.2、§8.1。
+ * - ingest() 为唯一写入入口：uuid 信任来源 = client 请求携带的 uuid（server 不研判：
+ *   携带即复用，记录不存在则按该 uuid 建立）；client 未携带时才分配新 uuid。
+ * - delete() 为治理入口：显式删除条目，请求即授权（无本地研判）。
+ * - 注册表为纯内存（REQ-008）：不写盘、无快照加载/去抖写队列；重启即清空。
+ * - 全部方法对内存模型同步操作（JS 单线程天然串行）。
+ * 设计文档：docs/DESIGN.md §5.2、§7。
  */
 import { randomUUID } from 'node:crypto';
 import type {
@@ -15,8 +16,6 @@ import type {
   HistoryQuery,
   HistoryResult,
   HistoryEntry,
-  RegistrySnapshot,
-  RegistryStore,
 } from '../domain/registry-model.js';
 import type { ReportEnvelope } from '../domain/contracts.js';
 import type { BoardLogger } from '../domain/logging.js';
@@ -24,61 +23,30 @@ import type { BoardLogger } from '../domain/logging.js';
 export interface RegistryOptions {
   /** 每个 agent 的历史上限（默认 1000）。 */
   historyLimit?: number;
-  /** 持久化去抖毫秒（默认 250）。 */
-  persistDebounceMs?: number;
 }
 
 export interface IngestResult {
   uuid: string;
+  /** server 在本次请求为新分配了 uuid（client 未携带时为 true）。 */
   assigned: boolean;
-  replaced: boolean;
 }
 
 export class AgentRegistry {
   private readonly agents = new Map<string, AgentRecord>();
-  private readonly store: RegistryStore;
   private readonly logger: BoardLogger;
   private readonly historyLimit: number;
-  private readonly persistDebounceMs: number;
-  private persistTimer: ReturnType<typeof setTimeout> | undefined;
-  private closed = false;
 
-  constructor(store: RegistryStore, logger: BoardLogger, options: RegistryOptions = {}) {
-    this.store = store;
+  constructor(logger: BoardLogger, options: RegistryOptions = {}) {
     this.logger = logger;
     this.historyLimit = options.historyLimit ?? 1000;
-    this.persistDebounceMs = options.persistDebounceMs ?? 250;
-
-    const snapshot = store.load();
-    if (snapshot !== null) {
-      for (const [uuid, record] of Object.entries(snapshot.agents)) {
-        this.agents.set(uuid, record);
-      }
-      logger.info('registry.restored', { agents: this.agents.size });
-    } else {
-      logger.info('registry.empty', { reason: 'no persisted snapshot' });
-    }
   }
 
-  /** 摄入一条已通过契约校验的上报信封，返回 uuid 分配结果。 */
+  /** 摄入一条已通过契约校验的上报信封，返回 uuid 处理结果。 */
   ingest(envelope: ReportEnvelope, serverNow: number): IngestResult {
+    // 信任模型：client 请求携带的 uuid 为信任来源；server 不做本地研判。
     const requested = envelope.agent.uuid;
-    let uuid: string;
-    let assigned = false;
-    let replaced = false;
-
-    if (requested === undefined) {
-      const sticky = this.findSticky(envelope.agent);
-      uuid = sticky ?? randomUUID();
-      assigned = sticky === undefined;
-    } else if (this.agents.has(requested)) {
-      uuid = requested;
-    } else {
-      // 客户端未知 uuid：不信任，改分配新 uuid（最小安全校验）。
-      uuid = randomUUID();
-      assigned = true;
-      replaced = true;
-    }
+    const uuid = requested ?? randomUUID();
+    const assigned = requested === undefined;
 
     let record = this.agents.get(uuid);
     if (record === undefined) {
@@ -120,25 +88,12 @@ export class AgentRegistry {
       record.history.splice(0, record.history.length - this.historyLimit);
     }
 
-    this.schedulePersist();
-    return { uuid, assigned, replaced };
+    return { uuid, assigned };
   }
 
-  /** 同 (name, cwd, sessionId) 的无 uuid 重复注册：复用既有 uuid。 */
-  private findSticky(agent: ReportEnvelope['agent']): string | undefined {
-    if (agent.sessionId === undefined) {
-      return undefined;
-    }
-    for (const record of this.agents.values()) {
-      if (
-        record.name === agent.name &&
-        record.cwd === agent.cwd &&
-        record.sessionId === agent.sessionId
-      ) {
-        return record.uuid;
-      }
-    }
-    return undefined;
+  /** 删除 agent 条目（治理操作：请求即授权）。返回条目是否存在。 */
+  delete(uuid: string): boolean {
+    return this.agents.delete(uuid);
   }
 
   private recordIdentityChanges(
@@ -226,42 +181,5 @@ export class AgentRegistry {
       entries,
       truncated,
     };
-  }
-
-  snapshot(): RegistrySnapshot {
-    return {
-      version: 1,
-      agents: Object.fromEntries(this.agents.entries()),
-    };
-  }
-
-  /** 关闭：强制最终持久化。 */
-  close(): void {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    if (this.persistTimer !== undefined) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = undefined;
-    }
-    this.store.save(this.snapshot());
-  }
-
-  private schedulePersist(): void {
-    if (this.closed) {
-      return;
-    }
-    if (this.persistTimer !== undefined) {
-      return;
-    }
-    this.persistTimer = setTimeout(() => {
-      this.persistTimer = undefined;
-      try {
-        this.store.save(this.snapshot());
-      } catch (error) {
-        this.logger.error('registry.persistFailed', { error: String(error) });
-      }
-    }, this.persistDebounceMs);
   }
 }

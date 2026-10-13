@@ -46,10 +46,8 @@ export type {
 export type {
   HistoryEntry,
   AgentRecord,
-  RegistrySnapshot,
   AgentSummary,
   HistoryQuery,
   HistoryResult,
 } from './registry-model.js';
-export type { RegistryStore } from './registry-model.js';
 export type { Transport, IdentityStore } from './ports.js';

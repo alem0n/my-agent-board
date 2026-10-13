@@ -7,8 +7,7 @@
  *
  * - http-server.ts：server 端 HTTP 端点。
  * - http-client.ts：client 端 HTTP 传输。
- * - file-store.ts：client 侧文件持久化（身份文件，全部异步）。
- * - registry-file-store.ts：server 侧注册表持久化（同步，独立进程权衡）。
+ * - file-store.ts：client 侧文件持久化（身份文件与日志，全部异步）。
  * - client-config-loader.ts：client 配置文件读取。
  * - simulator.ts：测试与演示用 pi 环境模拟器。
  * - pi-extension.ts：pi 扩展胶水（真实 ExtensionAPI 适配）。
@@ -23,7 +22,6 @@ export {
   readJsonFileAsync,
   SerialFileWriter,
 } from './file-store.js';
-export { FileRegistryStore, writeJsonAtomic, readJsonFile } from './registry-file-store.js';
 export {
   loadClientConfig,
   resolveConfigPath,

@@ -6,7 +6,6 @@
  * - 并发写入策略（docs/DESIGN.md §8）：身份文件 tmp + rename 原子写；
  *   同一文件的写经 SerialFileWriter 串行化。
  * - 上报缓冲纯内存（监控状态持续刷新，失败即丢弃，无需落盘）。
- * - server 侧注册表存储（同步）在 registry-file-store.ts，按进程职责分离。
  * - 外部错误转译为可读日志/结果，不静默。
  */
 import * as fsp from 'node:fs/promises';

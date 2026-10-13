@@ -100,7 +100,6 @@ function parseSuccessResponse(body: unknown): ReportResponse {
     ok: true,
     uuid,
     assigned,
-    ...(body['replaced'] === true ? { replaced: true } : {}),
     ...(accepted === undefined ? {} : { accepted }),
     ...(rejected === undefined ? {} : { rejected }),
   };

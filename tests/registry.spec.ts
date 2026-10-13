@@ -3,45 +3,38 @@
  *
  * 对应验收门槛：6 中的聚合/存储逻辑。
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { describe, it, expect } from 'vitest';
+import type { ReportEnvelope } from '../src/domain/contracts.js';
 import { AgentRegistry } from '../src/services/registry.js';
-import { FileRegistryStore } from '../src/infrastructure/registry-file-store.js';
 import { silentLogger } from '../src/domain/logging.js';
 import { buildEnvelope } from './fixtures/samples.js';
 
 const NOW = 1791800000000;
+const AGENT = buildEnvelope('agent_start', {}).agent;
 
-function makeRegistry(
-  dir: string,
-  options?: { historyLimit?: number; persistDebounceMs?: number },
-) {
-  return new AgentRegistry(
-    new FileRegistryStore(path.join(dir, 'agents.json'), silentLogger),
-    silentLogger,
-    {
-      historyLimit: options?.historyLimit ?? 1000,
-      persistDebounceMs: options?.persistDebounceMs ?? 250,
-    },
-  );
+/** 同一 agent 的连续摄入助手：携带首报采用的 uuid（真实 client 行为）。 */
+function sameAgent(uuid: string): ReportEnvelope['agent'] {
+  return { ...AGENT, uuid };
+}
+
+function makeRegistry(options?: { historyLimit?: number }): AgentRegistry {
+  return new AgentRegistry(silentLogger, {
+    historyLimit: options?.historyLimit ?? 1000,
+  });
 }
 
 describe('latest 聚合', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-reg-'));
-  });
-
   it('按状态保留最新载荷，历史追加全部记录', () => {
-    const registry = makeRegistry(dir);
+    const registry = makeRegistry();
     const envelope = buildEnvelope('agent_start', {});
     const first = registry.ingest(envelope, NOW);
 
     registry.ingest(
-      buildEnvelope('message_end', { role: 'assistant', contentPartCount: 2 }),
+      buildEnvelope(
+        'message_end',
+        { role: 'assistant', contentPartCount: 2 },
+        { agent: sameAgent(first.uuid) },
+      ),
       NOW + 1,
     );
     registry.ingest(
@@ -49,12 +42,7 @@ describe('latest 聚合', () => {
         'message_end',
         { role: 'assistant', contentPartCount: 5 },
         {
-          agent: {
-            uuid: first.uuid,
-            name: 'agent-a',
-            cwd: '/home/user/proj',
-            sessionId: 'sess-0001',
-          },
+          agent: sameAgent(first.uuid),
         },
       ),
       NOW + 2,
@@ -72,24 +60,21 @@ describe('latest 聚合', () => {
 
   it('42 个状态全部写入 latest（模拟器场景）', () => {
     // 覆盖性断言的单位测试版：e2e 中以真实流程再验证一次。
-    const registry = makeRegistry(dir);
+    const registry = makeRegistry();
     const first = registry.ingest(buildEnvelope('agent_snapshot', { cwd: '/p', mode: 'tui' }), NOW);
     expect(registry.get(first.uuid)?.latest['agent_snapshot']).toBeDefined();
   });
 });
 
 describe('历史与查询', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-hist-'));
-  });
-
   it('历史上限生效（环形截断，保留最新）', () => {
-    const registry = makeRegistry(dir, { historyLimit: 5 });
+    const registry = makeRegistry({ historyLimit: 5 });
     const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
     for (let i = 0; i < 10; i += 1) {
-      registry.ingest(buildEnvelope('agent_settled', {}), NOW + i + 1);
+      registry.ingest(
+        buildEnvelope('agent_settled', {}, { agent: sameAgent(first.uuid) }),
+        NOW + i + 1,
+      );
     }
     const record = registry.get(first.uuid)!;
     expect(record.history).toHaveLength(5);
@@ -100,10 +85,13 @@ describe('历史与查询', () => {
   });
 
   it('history 查询支持 state 过滤、limit 截断标记与 since 过滤', () => {
-    const registry = makeRegistry(dir);
+    const registry = makeRegistry();
     const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
     for (let i = 0; i < 4; i += 1) {
-      registry.ingest(buildEnvelope('agent_settled', {}), NOW + 10 + i);
+      registry.ingest(
+        buildEnvelope('agent_settled', {}, { agent: sameAgent(first.uuid) }),
+        NOW + 10 + i,
+      );
     }
     const uuid = first.uuid;
 
@@ -122,9 +110,9 @@ describe('历史与查询', () => {
   });
 
   it('list 输出摘要字段', () => {
-    const registry = makeRegistry(dir);
+    const registry = makeRegistry();
     const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
-    registry.ingest(buildEnvelope('agent_settled', {}), NOW + 1);
+    registry.ingest(buildEnvelope('agent_settled', {}, { agent: sameAgent(first.uuid) }), NOW + 1);
     const list = registry.list();
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({
@@ -138,50 +126,5 @@ describe('历史与查询', () => {
     expect(list[0]?.firstSeen).toBeLessThanOrEqual(list[0]!.lastSeen);
     // 无上报的摘要（理论路径）：lastState 为 null
     expect(list[0]?.lastState).not.toBeNull();
-  });
-});
-
-describe('持久化', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-persist-'));
-  });
-
-  it('close 强制最终写入，数据可被新实例加载', () => {
-    const registry = makeRegistry(dir, { persistDebounceMs: 10_000 });
-    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
-    // 未触发去抖定时器的情况下 close 必须落盘
-    registry.close();
-    const persisted = JSON.parse(fs.readFileSync(path.join(dir, 'agents.json'), 'utf8'));
-    expect(Object.keys(persisted['agents'])).toEqual([first.uuid]);
-
-    const reloaded = makeRegistry(dir);
-    expect(reloaded.list()[0]?.name).toBe('agent-a');
-  });
-
-  it('去抖窗口内的多次摄入合并为一次写', () => {
-    const store = new FileRegistryStore(path.join(dir, 'agents.json'), silentLogger);
-    const writes: string[] = [];
-    const trackingStore = {
-      load: () => store.load(),
-      save: (snapshot: unknown) => {
-        writes.push('write');
-        store.save(snapshot);
-      },
-    };
-    const registry = new AgentRegistry(trackingStore, silentLogger, { persistDebounceMs: 20 });
-    const first = registry.ingest(buildEnvelope('agent_start', {}), NOW);
-    registry.ingest(buildEnvelope('agent_settled', {}), NOW + 1);
-    registry.ingest(buildEnvelope('agent_settled', {}), NOW + 2);
-    void first;
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        expect(writes).toEqual(['write']);
-        registry.close();
-        expect(writes).toHaveLength(2);
-        resolve();
-      }, 60);
-    });
   });
 });

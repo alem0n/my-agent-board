@@ -36,7 +36,8 @@
 - `name` 未设置时回退使用当前 session id。
 - 首次通信（无 uuid）由 server 分配全局唯一 uuid 并返回；client 持久化到 `~/.pi/agent/agent-board-identity.json`，后续上报携带。
 - 持久化失败：明确错误日志 + 降级（每次会话由 server 分配新 uuid）。
-- 重复注册不产生重复 uuid：同 uuid 再注册复用；同进程同身份（name+cwd+sessionId）无 uuid 再注册复用。
+- uuid 为请求级信任字段：client 携带即被信任（记录不存在则按该 uuid 建立）；未携带时 server 为整个请求分配一个 uuid 并返回 `assigned:true`，client 采用并持久化。一个批量请求共用首个 uuid。
+- 重复注册：同 uuid 再注册复用；无 uuid 再注册 → 新 uuid（重复条目由 DELETE 治理，server 不研判合并）。
 - name/cwd 变化：保留 uuid，更新注册信息，记录 `identity_change` 历史。
 
 ### REQ-005 配置解析
@@ -56,11 +57,12 @@
 - `POST /v1/report`、`POST /v1/report/batch`（原子批，任一非法整体拒绝并返回逐条错误）。
 - 注册表维护 uuid、name、cwd、sessionId、firstSeen、lastSeen、reportCount、逐状态 latest、上限历史。
 - `GET /v1/agents`、`GET /v1/agents/:uuid`、`GET /v1/agents/:uuid/history`、`GET /v1/health`。
+- `DELETE /v1/agents/:uuid`：删除 agent 条目（latest + 历史一并删除），不存在返回 404。治理操作**请求即授权，server 不做本地研判**（无鉴权实现）。
 - 非法请求返回明确错误码（见 DESIGN.md §6）。
 
-### REQ-008 持久化
+### REQ-008 持久化（仅 client）
 
-- server 注册表持久化到本地 JSON 文件（原子写 + 串行化写队列）。
+- server 注册表为**纯内存**：不写盘（无 `--data-dir`、无 `agents.json`），重启即清空——监控状态持续刷新，服务端状态无离线保留价值，且避免文件 IO 与损坏面。
 - client uuid 使用本地文件（原子写）。
 
 ### REQ-009 隐私
@@ -87,5 +89,5 @@
 
 - 传输协议：HTTP/1.1 + JSON，基于 `node:http` 与全局 `fetch`，零新增运行时依赖（`pino` 除外，已在模板内）。
 - 契约校验自研轻量校验器（domain 层无外部依赖），契约以可读数据结构声明，版本化且独立演进。
-- uuid 服务端权威分配（客户端未知 uuid 不被信任，改分配新 uuid 并让 client 采用）。
+- uuid 为请求级信任字段：client 携带即信任（信封格式校验后），server 不研判；未携带时为请求分配。
 - 契约/协议版本号分离：信封协议版本 `1`；逐状态契约 semver `1.0.0`。

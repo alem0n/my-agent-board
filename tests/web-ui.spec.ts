@@ -3,28 +3,16 @@
  */
 import { describe, it, expect } from 'vitest';
 import * as http from 'node:http';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { BoardHttpServer } from '../src/infrastructure/http-server.js';
 import { AgentRegistry } from '../src/services/registry.js';
 import { WEB_UI_HTML } from '../src/infrastructure/web-ui-asset.js';
 import { loadServerConfig } from '../src/config.js';
-import { FileRegistryStore } from '../src/infrastructure/registry-file-store.js';
 import { boardLogger } from '../src/logger.js';
 
 let registry: AgentRegistry;
 
 function startServer(webUi: boolean): Promise<BoardHttpServer & { port: number }> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-webui-'));
-  registry = new AgentRegistry(
-    new FileRegistryStore(path.join(dir, 'agents.json'), boardLogger),
-    boardLogger,
-    {
-      historyLimit: 10,
-      persistDebounceMs: 10,
-    },
-  );
+  registry = new AgentRegistry(boardLogger, { historyLimit: 10 });
   const server = new BoardHttpServer({
     host: '127.0.0.1',
     port: 0,
@@ -81,7 +69,6 @@ describe('Web UI 挂载契约', () => {
       expect(JSON.parse(health.body)['protocolVersion']).toBe('1');
     } finally {
       await server.stop();
-      registry.close();
     }
   });
 
@@ -96,7 +83,6 @@ describe('Web UI 挂载契约', () => {
       expect(ui.status).toBe(404);
     } finally {
       await server.stop();
-      registry.close();
     }
   });
 
@@ -130,7 +116,6 @@ describe('Web UI 挂载契约', () => {
       }
     } finally {
       await server.stop();
-      registry.close();
     }
   });
 });

@@ -12,7 +12,6 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { createAgentBoard } from '../src/infrastructure/pi-extension.js';
 import { AgentRegistry } from '../src/services/registry.js';
 import { BoardHttpServer } from '../src/infrastructure/http-server.js';
-import { FileRegistryStore } from '../src/infrastructure/registry-file-store.js';
 import { boardLogger } from '../src/logger.js';
 import { STATE_IDS } from '../src/domain/contracts.js';
 
@@ -23,10 +22,7 @@ let baseUrl: string;
 
 beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-ext-'));
-  registry = new AgentRegistry(
-    new FileRegistryStore(path.join(dir, 'agents.json'), boardLogger),
-    boardLogger,
-  );
+  registry = new AgentRegistry(boardLogger);
   server = new BoardHttpServer({ host: '127.0.0.1', port: 0, registry, logger: boardLogger });
   const address = await server.start();
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -38,7 +34,6 @@ afterEach(async () => {
 
 async function closeServer(): Promise<void> {
   await server.stop();
-  registry.close();
 }
 
 /** Fake ExtensionContext：结构兼容，提供扩展读取的全部快照字段。 */

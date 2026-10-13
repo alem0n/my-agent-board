@@ -15,6 +15,7 @@ import {
   LOG_LEVEL_ENV,
   envLogLevel,
 } from '../src/infrastructure/client-config-loader.js';
+import { loadServerConfig } from '../src/config.js';
 import { silentLogger } from '../src/domain/logging.js';
 
 const GOOD_URL_CONFIG = {
@@ -214,5 +215,35 @@ describe('loadClientConfig（文件层）', () => {
     process.env[LOG_LEVEL_ENV] = 'verbose';
     expect(envLogLevel()).toEqual({ invalid: 'verbose' });
     delete process.env[LOG_LEVEL_ENV];
+  });
+});
+
+describe('loadServerConfig（server 参数解析）', () => {
+  it('`--port=7899` 与 `--port 7899` 两种形式等效', () => {
+    const eq = loadServerConfig(['node', 's', '--port=7899', '--host=0.0.0.0']);
+    const sp = loadServerConfig(['node', 's', '--port', '7899', '--host', '0.0.0.0']);
+    expect(eq.port).toBe(7899);
+    expect(sp.port).toBe(7899);
+    expect(sp.host).toBe('0.0.0.0');
+  });
+
+  it('空格形式值缺省时回落默认（不把后续 --flag 当值）', () => {
+    const conf = loadServerConfig(['node', 's', '--port', '--web']);
+    expect(conf.port).toBe(7878);
+    expect(conf.webUi).toBe(true);
+  });
+
+  it('非法值回落默认；--web 开关语义（--web / --web=false）', () => {
+    const bad = loadServerConfig(['node', 's', '--port=99999', '--log-level=chatty']);
+    expect(bad.port).toBe(7878);
+    expect(bad.logLevel).toBe('info');
+    expect(loadServerConfig(['node', 's', '--web']).webUi).toBe(true);
+    expect(loadServerConfig(['node', 's', '--web=false']).webUi).toBe(false);
+    expect(loadServerConfig(['node', 's']).webUi).toBe(false);
+  });
+
+  it('不再包含 dataDir（注册表纯内存，--data-dir 被忽略）', () => {
+    const conf = loadServerConfig(['node', 's', '--port=1']);
+    expect('dataDir' in conf).toBe(false);
   });
 });

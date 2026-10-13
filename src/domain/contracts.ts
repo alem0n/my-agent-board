@@ -98,7 +98,6 @@ export interface ReportResponse {
   ok: boolean;
   uuid: string;
   assigned: boolean;
-  replaced?: boolean;
   accepted?: number;
   rejected?: RejectedReport[];
 }
