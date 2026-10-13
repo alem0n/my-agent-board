@@ -6,7 +6,8 @@
  * - 不得静默吞错：所有替换均产出 issues，由调用方输出日志。
  * 设计文档：docs/DESIGN.md（配置文件字段约定）。
  */
-import type { BoardLogger } from './logging.js';
+import type { BoardLogger, LogLevel } from './logging.js';
+import { LOG_LEVELS } from './logging.js';
 
 export interface RetryConfig {
   maxAttempts: number;
@@ -33,6 +34,8 @@ export interface ClientConfig {
   flushOnCount: number;
   /** 发送失败重试与断线重连参数。 */
   retry: RetryConfig;
+  /** 日志级别：未配置即 silent（client 默认零日志，显式配置才开启）。 */
+  logLevel?: LogLevel;
   /** issues: 解析过程中发生的替换（每条一个明确原因）。 */
   issues: ConfigIssue[];
 }
@@ -57,8 +60,8 @@ export const DEFAULT_CLIENT_CONFIG: Omit<ClientConfig, 'issues'> = {
     backoffFactor: 2,
     jitter: true,
   },
+  logLevel: 'silent',
 };
-
 const BOUNDS: Record<string, { min: number; max: number }> = {
   reportIntervalMs: { min: 1_000, max: 3_600_000 },
   flushIntervalMs: { min: 500, max: 60_000 },
@@ -66,6 +69,10 @@ const BOUNDS: Record<string, { min: number; max: number }> = {
   maxBufferSize: { min: 10, max: 100_000 },
   flushOnCount: { min: 1, max: 100_000 },
 };
+
+function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as ReadonlyArray<string>).includes(value);
+}
 
 function parseRetry(raw: unknown, issues: ConfigIssue[]): RetryConfig {
   const fallback = DEFAULT_CLIENT_CONFIG.retry;
@@ -231,12 +238,27 @@ export function parseClientConfig(
     }
   }
 
+  // logLevel（可选）：非法值记 issue 并保持 silent（client 默认零日志）
+  const rawLogLevel = source['logLevel'];
+  let logLevel: LogLevel | undefined;
+  if (rawLogLevel !== undefined) {
+    if (isLogLevel(rawLogLevel)) {
+      logLevel = rawLogLevel;
+    } else {
+      issues.push({
+        field: 'logLevel',
+        message: `must be one of ${LOG_LEVELS.join('/')}; logging stays off`,
+      });
+    }
+  }
+
   // unknown keys
   const known = new Set([
     'url',
     'host',
     'port',
     'name',
+    'logLevel',
     'reportIntervalMs',
     'flushIntervalMs',
     'requestTimeoutMs',
@@ -269,6 +291,7 @@ export function parseClientConfig(
     maxBufferSize: parseNamedNumber(source, 'maxBufferSize', fallback.maxBufferSize, issues),
     flushOnCount: parseNamedNumber(source, 'flushOnCount', fallback.flushOnCount, issues),
     retry: parseRetry(source['retry'], issues),
+    ...(logLevel === undefined ? {} : { logLevel }),
     issues,
   };
 }

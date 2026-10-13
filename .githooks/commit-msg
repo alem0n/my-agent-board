@@ -1,6 +1,7 @@
 #!/bin/sh
 # Conventional Commits 校验：<type>(scope)?: <description>
 # 规范见 AGENTS.md「提交规范」。合入仓库与发布自动化的契约。
+# 仓库内统一 LF 行尾（见 .gitattributes）：CRLF 会让 ^M 进入命令名导致正则失配。
 commit_msg_file="$1"
 
 # 取第一条非注释、非空行

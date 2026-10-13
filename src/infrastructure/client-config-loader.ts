@@ -9,7 +9,8 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseClientConfig, logConfigIssues, type ClientConfig } from '../domain/client-config.js';
-import type { BoardLogger } from '../domain/logging.js';
+import type { BoardLogger, LogLevel } from '../domain/logging.js';
+import { LOG_LEVELS } from '../domain/logging.js';
 
 export const DEFAULT_CONFIG_PATH = path.join(
   os.homedir(),
@@ -18,6 +19,21 @@ export const DEFAULT_CONFIG_PATH = path.join(
   'agent-board-server.json',
 );
 export const CONFIG_PATH_ENV = 'AGENT_BOARD_SERVER_CONFIG';
+
+/** 日志级别环境变量（配置文件无法解析时的诊断入口；优先级高于配置文件）。 */
+export const LOG_LEVEL_ENV = 'AGENT_BOARD_LOG_LEVEL';
+
+/** 从环境变量解析日志级别。缺失/非法均视为未设置（client 默认零日志）；
+ *  非法值经 invalid 返回，供调用方记 issue（零日志下不输出，开启日志后可见）。 */
+export function envLogLevel(): { level?: LogLevel; invalid?: string } {
+  const raw = process.env[LOG_LEVEL_ENV];
+  if (typeof raw !== 'string') {
+    return {};
+  }
+  return (LOG_LEVELS as ReadonlyArray<string>).includes(raw)
+    ? { level: raw as LogLevel }
+    : { invalid: raw };
+}
 
 export function resolveConfigPath(explicit?: string): string {
   if (explicit !== undefined && explicit.length > 0) {
@@ -57,7 +73,12 @@ export async function loadClientConfig(options: {
         action: 'falling back to built-in defaults',
       });
     }
-    const config = parseClientConfig(undefined);
+    const config = parseClientConfig(
+      undefined,
+      code === 'ENOENT'
+        ? `config file ${filePath} not found; using built-in defaults`
+        : `config file ${filePath} could not be read (${String(error)}); using built-in defaults`,
+    );
     logConfigIssues(config, logger, code === 'ENOENT' ? 'missing-file' : 'read-failed');
     return config;
   }
@@ -71,7 +92,10 @@ export async function loadClientConfig(options: {
       error: String(error),
       action: 'falling back to built-in defaults',
     });
-    const config = parseClientConfig(undefined, 'config JSON is invalid; using built-in defaults');
+    const config = parseClientConfig(
+      undefined,
+      `config file ${filePath} is not valid JSON (${String(error)}); using built-in defaults`,
+    );
     logConfigIssues(config, logger, 'invalid-json');
     return config;
   }

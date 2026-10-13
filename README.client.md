@@ -39,23 +39,43 @@ pi --extension ./extension/agent-board.ts
 
 ## 配置
 
-配置文件 `~/.pi/agent/agent-board-server.json`（可选；缺失时输出错误日志并降级默认地址）：
+配置文件 `~/.pi/agent/agent-board-server.json`（可选；缺失时降级默认地址，问题记录到 issues）：
 
 ```json
 {
   "url": "http://your-server-host:7878",
-  "name": "my-agent"
+  "name": "my-agent",
+  "logLevel": "info"
 }
 ```
 
+字段：`url`（或 `host`+`port`）、`name`、`logLevel`、`reportIntervalMs`、`flushIntervalMs`、`requestTimeoutMs`、`maxBufferSize`、`flushOnCount`、`retry`。非法值一律降级默认，不静默失败。
+
 环境变量 `AGENT_BOARD_SERVER_CONFIG` 可覆盖配置文件路径。
+
+## 日志（默认关闭）
+
+client 默认**零日志**：不创建日志文件、不产生任何日志 IO。两种方式显式开启：
+
+- 配置文件 `"logLevel": "info"`（取值 `silent` / `trace` / `debug` / `info` / `warn` / `error`）；
+- 环境变量 `AGENT_BOARD_LOG_LEVEL`（优先级更高；配置文件本身损坏时的诊断入口）。
+
+开启后日志为 JSON 行，写入 `~/.pi/agent/agent-board-client.log`，内容含 `reporter.start`、`report.retry`、`transport.unreachable`、`report.shutdownDropped`、`client.config.issue` 等键。
 
 ## 运行足迹
 
 - `~/.pi/agent/agent-board-identity.json` — server 分配的 uuid
-- `~/.pi/agent/agent-board-client.log` — client 日志（JSON 行）
+- `~/.pi/agent/agent-board-client.log` — 日志（**仅 logLevel 开启时存在**，默认不创建）
 
-全异步 IO，不阻塞 pi 主线程。上报失败即丢弃（监控状态持续刷新，下一周期重采新状态）。
+全异步 IO，不阻塞 pi 主线程。发送失败按指数退避重试并保留缓冲；server 不可达时停止上报并周期健康探测，恢复后继续；会话关闭时尽力排空缓冲（限时 3s），超时或不可达时丢弃残留并计数。
+
+## 排障
+
+- **先开日志**：默认零日志，排障前在配置文件加 `"logLevel": "info"`（或设 `AGENT_BOARD_LOG_LEVEL=info`）后复现。
+- 日志出现 `transport.unreachable`：server 未运行，或 `agent-board-server.json` 的 `url` 与实际部署不一致。client 自动重试与探测，不影响 pi 本身。
+- 日志出现 `report.shutdownDropped`（字段 `dropped`）：关闭时缓冲未能发出（server 不可达）。启动 server 后，下一会话重新采集全部当前状态。
+- 日志出现带 `reason: "shutdown"` 的 `buffer.overflow`：关闭排空超过 3s 限时后的残留丢弃，原因同上。
+- 运行中出现 `buffer.overflow`（无 reason）：server 不可达期间缓冲饱和（默认 1000 条）。server 恢复后自动排空最新 1000 条。
 
 ## 协议
 

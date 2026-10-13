@@ -14,7 +14,9 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { BoardLogger } from '../domain/logging.js';
+import type { BoardLogger, LogLevel } from '../domain/logging.js';
+import { silentLogger, LOG_LEVELS } from '../domain/logging.js';
+import { logConfigIssues } from '../domain/client-config.js';
 import type {
   ContextUsageSnapshot,
   ExtensionMode,
@@ -23,21 +25,22 @@ import type {
   PiStateSource,
 } from '../domain/pi-env.js';
 import type { Transport } from '../domain/ports.js';
-import { loadClientConfig } from './client-config-loader.js';
+import { loadClientConfig, envLogLevel, LOG_LEVEL_ENV } from './client-config-loader.js';
 import { FileIdentityStore, SerialFileWriter } from './file-store.js';
 import { HttpTransport } from './http-client.js';
 import { Reporter } from '../services/reporter.js';
 
 const DEFAULT_AGENT_DIR = path.join(os.homedir(), '.pi', 'agent');
 
-/** BoardLogger 的 pi 进程内实现：JSON 行异步写入本地文件（串行写队列，不依赖 pino、不阻塞 pi 主线程）。 */
+/** BoardLogger 的 pi 进程内实现：JSON 行异步写入本地文件（串行写队列，不依赖 pino、不阻塞 pi 主线程）。
+ * 默认 silent：除非用户经配置文件 logLevel 或 AGENT_BOARD_LOG_LEVEL 显式开启，不创建文件、不产生任何日志 IO。 */
 class JsonLineFileLogger implements BoardLogger {
   private readonly filePath: string;
   private readonly minLevel: number;
   private readonly writer = new SerialFileWriter();
   private lost = 0;
 
-  constructor(filePath: string, level: 'trace' | 'debug' | 'info' | 'warn' | 'error' = 'info') {
+  constructor(filePath: string, level: LogLevel = 'silent') {
     this.filePath = filePath;
     this.minLevel = LEVELS[level];
   }
@@ -85,7 +88,8 @@ class JsonLineFileLogger implements BoardLogger {
   }
 }
 
-const LEVELS: Record<'trace' | 'debug' | 'info' | 'warn' | 'error', number> = {
+const LEVELS: Record<LogLevel, number> = {
+  silent: Number.POSITIVE_INFINITY,
   trace: 10,
   debug: 20,
   info: 30,
@@ -114,12 +118,23 @@ export async function createAgentBoard(
 ): Promise<AgentBoardComponents> {
   const agentDir = paths.agentDir ?? DEFAULT_AGENT_DIR;
   const logPath = paths.logPath ?? path.join(agentDir, 'agent-board-client.log');
-  const logger = new JsonLineFileLogger(logPath, 'info');
 
+  // client 默认零日志：env 或配置文件显式开启 logLevel 前不产生任何日志 IO。
+  // 配置解析期不输出（级别未定）；解析结果中的 issues 在级别确定后补输出（不静默失败）。
   const config = await loadClientConfig({
     ...(paths.configPath === undefined ? {} : { filePath: paths.configPath }),
-    logger,
+    logger: silentLogger,
   });
+  const env = envLogLevel();
+  const logger = new JsonLineFileLogger(logPath, env.level ?? config.logLevel ?? 'silent');
+  if (env.invalid !== undefined) {
+    logger.warn('client.config.issue', {
+      context: 'client',
+      field: LOG_LEVEL_ENV,
+      message: `invalid value '${env.invalid}'; must be one of ${LOG_LEVELS.join('/')}; logging stays off`,
+    });
+  }
+  logConfigIssues(config, logger, 'client');
 
   const identityStore = new FileIdentityStore(
     path.join(agentDir, 'agent-board-identity.json'),
@@ -187,9 +202,13 @@ export async function createAgentBoard(
   });
   // factory 期的启动路径：若扩展加载时 session 已在运行（reload 后），不订阅后续事件将丢失；
   // 由 session_start 兜底，最坏情况是错过加载到首事件之间的事件（保守假设，见设计文档）。
-  const unsubscribeSessionShutdown = pi.on('session_shutdown', (_event, ctx) => {
+  // 《手册》: session_shutdown 是会话级资源的同步点（handler 被 await）；
+  // await stop 使关闭路径的尽力排空获得限时窗口（buffer 为空时即时返回）；
+  // 随后等日志队列落盘——生产路径 components.stop() 不可达（扩展入口丢弃 components）。
+  const unsubscribeSessionShutdown = pi.on('session_shutdown', async (_event, ctx) => {
     currentCtx = ctx;
-    void reporter.stop();
+    await reporter.stop();
+    await logger.flush();
   });
   unsubscribeAllExtra.push(unsubscribeSessionStart, unsubscribeSessionShutdown);
 

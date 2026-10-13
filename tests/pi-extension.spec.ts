@@ -141,7 +141,7 @@ describe('pi 扩展胶水层', () => {
 
   it('session_start 启动 Reporter；事件经真实订阅路径上报；uuid 持久化', async () => {
     const pi = makePi();
-    const configPath = writeConfig({ url: baseUrl, name: 'ext-agent' });
+    const configPath = writeConfig({ url: baseUrl, name: 'ext-agent', logLevel: 'info' });
     const components = await createAgentBoard(pi, { agentDir: dir, configPath });
     const ctx = makeCtx();
 
@@ -201,38 +201,123 @@ describe('pi 扩展胶水层', () => {
     expect(snapshot['contextUsage']).toEqual({ tokens: 4200, contextWindow: 200000, percent: 2.1 });
     expect(record['name']).toBe('ext-agent');
 
-    // 日志文件写入（JSON 行）
+    // 日志文件写入（JSON 行）——仅当配置开启 logLevel 时才写
     const logFile = path.join(dir, 'agent-board-client.log');
     expect(fs.existsSync(logFile)).toBe(true);
+    const log = fs.readFileSync(logFile, 'utf8');
+    expect(log).toContain('reporter.start');
     await components.stop();
   });
 
-  it('配置缺失时输出错误日志且降级默认地址（不静默）', async () => {
+  it('默认零日志：未配置 logLevel 时不创建日志文件（client 轻量契约）', async () => {
     const pi = makePi();
-    const logFile = path.join(dir, 'agent-board-client.log');
     const components = await createAgentBoard(pi, {
       agentDir: dir,
-      configPath: path.join(dir, 'nope.json'),
+      configPath: writeConfig({ url: baseUrl }),
     });
     for (const handler of pi.emitted.get('session_start') ?? []) {
       handler({ type: 'session_start', reason: 'startup' }, makeCtx());
     }
     await components.reporter.collectSnapshotAndFlush();
-    const log = fs.readFileSync(logFile, 'utf8');
-    expect(log).toContain('client.config.missing');
+    expect(components.reporter.getStats().sent).toBe(1); // 上报功能正常
     await components.stop();
+    expect(fs.existsSync(path.join(dir, 'agent-board-client.log'))).toBe(false);
   }, 20_000);
 
-  it('session_shutdown 停止 Reporter（尽力刷新）', async () => {
+  it('logLevel 配置开启：按级别写入 JSON 行日志', async () => {
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl, logLevel: 'info' }),
+    });
+    for (const handler of pi.emitted.get('session_start') ?? []) {
+      handler({ type: 'session_start', reason: 'startup' }, makeCtx());
+    }
+    await components.reporter.collectSnapshotAndFlush();
+    await components.stop(); // logger.flush() 后日志落盘
+    const log = fs.readFileSync(path.join(dir, 'agent-board-client.log'), 'utf8');
+    expect(log).toContain('reporter.start');
+  }, 20_000);
+
+  it('配置文件缺失 + AGENT_BOARD_LOG_LEVEL=error：issues 补输出（不静默）', async () => {
+    process.env['AGENT_BOARD_LOG_LEVEL'] = 'error';
+    try {
+      const pi = makePi();
+      const logFile = path.join(dir, 'agent-board-client.log');
+      const components = await createAgentBoard(pi, {
+        agentDir: dir,
+        configPath: path.join(dir, 'nope.json'),
+      });
+      await components.stop(); // 构造时补输出的 issues 在 flush 后落盘
+      const log = fs.readFileSync(logFile, 'utf8');
+      expect(log).toContain('client.config.issue');
+    } finally {
+      delete process.env['AGENT_BOARD_LOG_LEVEL'];
+    }
+  });
+
+  it('LOG_LEVEL_ENV 优先级高于配置文件；非法值记 issue', async () => {
+    const pi = makePi();
+    const components = await createAgentBoard(pi, {
+      agentDir: dir,
+      configPath: writeConfig({ url: baseUrl, logLevel: 'silent' }),
+    });
+    await components.stop();
+    expect(fs.existsSync(path.join(dir, 'agent-board-client.log'))).toBe(false);
+
+    // env 合法值胜过配置文件的 silent
+    process.env['AGENT_BOARD_LOG_LEVEL'] = 'info';
+    try {
+      const pi2 = makePi();
+      const components2 = await createAgentBoard(pi2, {
+        agentDir: dir,
+        configPath: writeConfig({ url: baseUrl, logLevel: 'silent' }),
+      });
+      for (const handler of pi2.emitted.get('session_start') ?? []) {
+        handler({ type: 'session_start', reason: 'startup' }, makeCtx());
+      }
+      await components2.stop();
+      const log = fs.readFileSync(path.join(dir, 'agent-board-client.log'), 'utf8');
+      expect(log).toContain('reporter.start');
+    } finally {
+      delete process.env['AGENT_BOARD_LOG_LEVEL'];
+    }
+
+    // env 非法值：配置文件 logLevel 生效，invalid env 的 issue 在日志级别内可见
+    process.env['AGENT_BOARD_LOG_LEVEL'] = 'verbose';
+    try {
+      const pi3 = makePi();
+      const components3 = await createAgentBoard(pi3, {
+        agentDir: dir,
+        configPath: writeConfig({ url: baseUrl, logLevel: 'warn' }),
+      });
+      await components3.stop();
+      const log = fs.readFileSync(path.join(dir, 'agent-board-client.log'), 'utf8');
+      expect(log).toContain('client.config.issue');
+      expect(log).toContain('AGENT_BOARD_LOG_LEVEL');
+    } finally {
+      delete process.env['AGENT_BOARD_LOG_LEVEL'];
+    }
+  }, 20_000);
+
+  it('session_shutdown 停止 Reporter（await 尽力排空后不再采集）', async () => {
     const pi = makePi();
     const configPath = writeConfig({ url: baseUrl });
     const components = await createAgentBoard(pi, { agentDir: dir, configPath });
     for (const handler of pi.emitted.get('session_start') ?? []) {
       handler({ type: 'session_start', reason: 'startup' }, makeCtx());
     }
+    // handler 被 await：stop 的尽力排空在返回前完成
     for (const handler of pi.emitted.get('session_shutdown') ?? []) {
-      handler({ type: 'session_shutdown', reason: 'quit' }, makeCtx());
+      await handler({ type: 'session_shutdown', reason: 'quit' }, makeCtx());
     }
+    // 尽力排空已发送 session_shutdown 采集的信封（server 可见）
+    const uuid = components.reporter.currentIdentity?.uuid;
+    expect(uuid).toMatch(/^[0-9a-f-]{36}$/);
+    const response = await fetch(`${baseUrl}/v1/agents/${uuid}`);
+    const record = (await response.json()) as Record<string, unknown>;
+    const latest = record['latest'] as Record<string, unknown>;
+    expect(Object.keys(latest)).toEqual(expect.arrayContaining(['session_shutdown']));
     // 停止后再触发事件不再采集
     const before = components.reporter.getStats().collected;
     emit(pi, 'agent_start', { type: 'agent_start' }, makeCtx());

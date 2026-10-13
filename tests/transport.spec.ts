@@ -51,6 +51,29 @@ class ScriptedTransport implements Transport {
   }
 }
 
+/** 手动控制的传输：postBatch 挂起直到 resolveBatch 被调用（测试关闭路径与进行中 flush 的并发）。 */
+class ManualTransport implements Transport {
+  public batches: ReportEnvelope[][] = [];
+  private pending: ((response: ReportResponse) => void) | null = null;
+
+  async postBatch(reports: ReportEnvelope[]): Promise<ReportResponse> {
+    this.batches.push(reports);
+    return new Promise<ReportResponse>((resolve) => {
+      this.pending = resolve;
+    });
+  }
+
+  resolveBatch(response: ReportResponse): void {
+    const pending = this.pending;
+    this.pending = null;
+    pending?.(response);
+  }
+
+  async health(): Promise<boolean> {
+    return true;
+  }
+}
+
 const okResponse = (): ReportResponse => ({
   ok: true,
   uuid: TEST_UUID,
@@ -469,5 +492,162 @@ describe('Reporter 发送失败重试与缓冲保留', () => {
 
   it('有效信封 helper 契约一致', () => {
     expect(buildEnvelope('agent_start', {}).state).toBe('agent_start');
+  });
+});
+
+describe('优雅关闭：尽力排空与退出唤醒', () => {
+  it('可达时关闭：尽力排空缓冲（stop 自身完成发送，不丢弃）', async () => {
+    const transport = new ScriptedTransport();
+    const reporter = makeReporter({ transport });
+    try {
+      reporter.start();
+      reporter.collectSnapshot();
+      reporter.collectSnapshot();
+      // 不调用 flushNow：关闭路径必须自行发送缓冲
+      await reporter.stop();
+      expect(transport.batches).toHaveLength(1);
+      expect(transport.batches[0]).toHaveLength(2);
+      expect(reporter.getStats().sent).toBe(2);
+      expect(reporter.getStats().dropped).toBe(0);
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it('不可达时关闭：尽力单次尝试整批后丢弃并计数（不产生退避重试风暴）', async () => {
+    const transport = new ScriptedTransport();
+    transport.failAll = true;
+    // 配置 maxAttempts=5：关闭路径强制单次尝试，不随配置重试
+    const reporter = makeReporter({ transport });
+    try {
+      reporter.start();
+      reporter.collectSnapshot();
+      reporter.collectSnapshot();
+      await reporter.stop();
+      expect(transport.batches).toHaveLength(1);
+      expect(transport.batches[0]).toHaveLength(2);
+      expect(reporter.getStats().sent).toBe(0);
+      expect(reporter.getStats().dropped).toBe(2);
+      expect(reporter.getStats().flushFailures).toBe(1);
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it('关闭与进行中 flush 并发：先等待其退出，再排空剩余', async () => {
+    const transport = new ManualTransport();
+    const reporter = makeReporter({ transport });
+    try {
+      reporter.start();
+      reporter.collectSnapshot(); // A：由进行中的 flush 持有
+      const flushing = reporter.flushNow();
+      // 等待进行中 flush splice 出批次 A（ensureIdentity 后的微任务）再入队 B
+      await new Promise((resolve) => setImmediate(resolve));
+      reporter.collectSnapshot(); // B：留给关闭路径排空（flushOnCount 大，不自动触发）
+      // stop 先置 running=false → 进行中 flush 的循环在批次结束后退出，不抢后续批次
+      const stopping = reporter.stop();
+      transport.resolveBatch(okResponse()); // A 发送成功；循环检测 running=false 后退出
+      // 等待 shutdownDrain 接手：B 被 splice 出并挂起（微任务推进）
+      await waitFor(() => transport.batches.length >= 2);
+      transport.resolveBatch(okResponse()); // shutdownDrain 排空 B
+      await stopping;
+      await flushing;
+      expect(transport.batches.map((batch) => batch.length)).toEqual([1, 1]);
+      expect(reporter.getStats().sent).toBe(2);
+      expect(reporter.getStats().dropped).toBe(0);
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it('排空超时：3s 限时 guard 兑底，缓冲残留按关闭丢弃计数', async () => {
+    const transport = new ManualTransport(); // postBatch 永不 resolve
+    const reporter = makeReporter({ transport, config: { flushOnCount: 1 } });
+    try {
+      reporter.start();
+      reporter.collectSnapshot(); // flushOnCount=1 → A 立即被 splice 出并挂起（flushInFlight 持有）
+      await new Promise((resolve) => setImmediate(resolve));
+      reporter.collectSnapshot(); // B 留在缓冲：进行中的 flush 阻止新 flush
+      const stopStarted = Date.now();
+      await reporter.stop();
+      // 限时 guard 生效：关闭不等待永不 settle 的 postBatch
+      const elapsed = Date.now() - stopStarted;
+      expect(elapsed).toBeGreaterThanOrEqual(2_500);
+      expect(elapsed).toBeLessThan(5_000);
+      expect(reporter.getStats().sent).toBe(0);
+      // B 在缓冲中被 dropOverflow(true) 丢弃计数
+      expect(reporter.getStats().dropped).toBe(1);
+    } finally {
+      await reporter.stop();
+    }
+  }, 10_000);
+
+  it('stop 后 start 重启：不可达与进行中状态不带入新会话', async () => {
+    const transport = new ScriptedTransport();
+    transport.failAll = true;
+    transport.healthOkAfter = HEALTH_NEVER; // 首轮保持不可达
+    const reporter = makeReporter({
+      transport,
+      config: { retry: { ...baseConfig.retry, maxAttempts: 1, jitter: false } },
+    });
+    try {
+      reporter.start();
+      reporter.collectSnapshot();
+      await reporter.flushNow(); // → 不可达
+      expect(reporter.isReachable()).toBe(false);
+      await reporter.stop();
+
+      transport.failAll = false;
+      reporter.start(); // 重启：reachable / flushInFlight / batchSizeLimit 已重置
+      reporter.collectSnapshot();
+      await reporter.flushNow();
+      expect(reporter.isReachable()).toBe(true);
+      expect(reporter.getStats().sent).toBe(1);
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it('关闭时唤醒恢复探测：退出不挂起在完整退避周期上（真实定时器）', async () => {
+    const transport = new ScriptedTransport();
+    transport.failAll = true;
+    transport.healthOkAfter = HEALTH_NEVER;
+    const reporter = new Reporter({
+      source: { subscribe: () => () => undefined },
+      env: { snapshot: envSnapshot },
+      transport,
+      identityStore: new MemIdentityStore(),
+      config: {
+        ...baseConfig,
+        issues: [],
+        retry: {
+          ...baseConfig.retry,
+          maxAttempts: 1,
+          jitter: false,
+          initialDelayMs: 60_000,
+          maxDelayMs: 60_000,
+        },
+      },
+      logger: silentLogger,
+      now: () => NOW,
+      // 不注入 sleep：恢复退避使用真实、可被 stop 唤醒的定时器
+    });
+    try {
+      reporter.start();
+      reporter.collectSnapshot();
+      await reporter.flushNow(); // 重试耗尽 → 不可达，恢复探测进入 60s 睡眠
+      expect(reporter.isReachable()).toBe(false);
+
+      const stopStarted = Date.now();
+      await reporter.stop();
+      // 若未唤醒：60s 退避定时器会挂起退出（同时 recoveryWaiters 残留）
+      expect(Date.now() - stopStarted).toBeLessThan(5_000);
+      expect((reporter as unknown as { recoveryWaiters: unknown[] })['recoveryWaiters']).toEqual(
+        [],
+      );
+      expect(reporter.getStats().dropped).toBe(1); // 尽力一次失败 → 丢弃并计数
+    } finally {
+      await reporter.stop();
+    }
   });
 });

@@ -12,6 +12,8 @@ import {
   loadClientConfig,
   resolveConfigPath,
   CONFIG_PATH_ENV,
+  LOG_LEVEL_ENV,
+  envLogLevel,
 } from '../src/infrastructure/client-config-loader.js';
 import { silentLogger } from '../src/domain/logging.js';
 
@@ -115,6 +117,24 @@ describe('parseClientConfig（纯解析）', () => {
     expect(config.name).toBeUndefined();
     expect(config.issues.map((issue) => issue.field)).toContain('name');
   });
+
+  it('logLevel 未配置时为 undefined（client 默认零日志）', () => {
+    const config = parseClientConfig(GOOD_URL_CONFIG);
+    expect(config.logLevel).toBeUndefined();
+    expect(config.issues).toEqual([]);
+  });
+
+  it('logLevel 合法值原样保留', () => {
+    const config = parseClientConfig({ ...GOOD_URL_CONFIG, logLevel: 'warn' });
+    expect(config.logLevel).toBe('warn');
+    expect(config.issues).toEqual([]);
+  });
+
+  it('logLevel 非法值记 issue 并保持 silent', () => {
+    const config = parseClientConfig({ ...GOOD_URL_CONFIG, logLevel: 'verbose' });
+    expect(config.logLevel).toBeUndefined();
+    expect(config.issues.map((issue) => issue.field)).toContain('logLevel');
+  });
 });
 
 describe('loadClientConfig（文件层）', () => {
@@ -185,5 +205,14 @@ describe('loadClientConfig（文件层）', () => {
     expect(resolveConfigPath()).toBe(
       path.join(os.homedir(), '.pi', 'agent', 'agent-board-server.json'),
     );
+  });
+
+  it('envLogLevel：合法值解析，非法/缺失视为未设置（非法值经 invalid 返回）', () => {
+    expect(envLogLevel()).toEqual({});
+    process.env[LOG_LEVEL_ENV] = 'info';
+    expect(envLogLevel()).toEqual({ level: 'info' });
+    process.env[LOG_LEVEL_ENV] = 'verbose';
+    expect(envLogLevel()).toEqual({ invalid: 'verbose' });
+    delete process.env[LOG_LEVEL_ENV];
   });
 });

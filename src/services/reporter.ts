@@ -6,6 +6,8 @@
  * - 周期采样 agent_snapshot（session_start / agent_end 边界补采）。
  * - 缓冲（超限丢弃最旧条目，状态持续刷新无需持久化）、退避重试、断线健康探测
  *   恢复、uuid 持久化与采用。
+ * - 关闭时尽力排空（先等待进行中的 flush，再对剩余缓冲每批单次尝试，限时 3s）；
+ *   关闭唤醒恢复探测的退避睡眠，退出不挂起在退避定时器上。
  * - 不直接访问 IO：通过 Transport / IdentityStore 端口交互。
  * 设计文档：docs/DESIGN.md §6.3、§7。
  */
@@ -66,8 +68,10 @@ export class Reporter {
   private running = false;
   private started = false;
   private reachable = true;
-  private flushInFlight = false;
+  private flushInFlight: Promise<{ sent: number }> | null = null;
   private recoveryInFlight = false;
+  /** 恢复探测退避睡眠的唤醒句柄（stop 时清除，避免退出挂起）。 */
+  private recoveryWaiters: Array<() => void> = [];
   /** 413 拆分后的批次大小上限（成功后重置为 MAX_BATCH）。 */
   private batchSizeLimit = MAX_BATCH;
   private unsubscribers: (() => void)[] = [];
@@ -107,6 +111,10 @@ export class Reporter {
     }
     this.started = true;
     this.running = true;
+    // 重置关闭后残留状态（stop→start 重启场景）：上轮不可达、进行中批次、拆半限频不带入新会话。
+    this.reachable = true;
+    this.flushInFlight = null;
+    this.batchSizeLimit = MAX_BATCH;
     this.deps.logger.info('reporter.start', {
       serverUrl: this.deps.config.serverUrl,
       states: EVENT_STATES.length + 1,
@@ -120,7 +128,9 @@ export class Reporter {
     }
 
     this.flushTimer = setInterval(() => {
-      void this.flushCycle();
+      void this.flushCycle().catch((error) => {
+        this.deps.logger.error('report.flushUnexpectedError', { error: String(error) });
+      });
     }, this.deps.config.flushIntervalMs);
     this.snapshotTimer = setInterval(() => {
       this.collectSnapshot();
@@ -152,7 +162,11 @@ export class Reporter {
     await this.identityLoading;
   }
 
-  /** 停止：取消订阅、清定时器、尽力刷新（残留缓冲丢弃并计数）。幂等。 */
+  /**
+   * 停止：取消订阅、清定时器、尽力排空缓冲、残留丢弃并计数。幂等。
+   * 先等待进行中的 flush 退出，再对剩余缓冲尽力发送（每批单次尝试），
+   * 整体限时 SHUTDOWN_FLUSH_TIMEOUT_MS；超时或不可达时残留丢弃并计数。
+   */
   async stop(): Promise<void> {
     if (!this.started) {
       return;
@@ -173,11 +187,16 @@ export class Reporter {
       clearInterval(this.snapshotTimer);
       this.snapshotTimer = undefined;
     }
+    // 唤醒恢复探测的退避睡眠：关闭不等待完整退避周期。
+    this.wakeRecovery();
 
+    const guard = shutdownTimer(SHUTDOWN_FLUSH_TIMEOUT_MS);
     try {
-      await Promise.race([this.flushCycle(), this.sleepFn(SHUTDOWN_FLUSH_TIMEOUT_MS)]);
+      await Promise.race([this.shutdownDrain(), guard.promise]);
     } catch (error) {
       this.deps.logger.warn('reporter.shutdownFlushError', { error: String(error) });
+    } finally {
+      guard.cancel();
     }
     this.dropOverflow(true);
     // 等待进行中的身份持久化写落盘。
@@ -320,78 +339,110 @@ export class Reporter {
   // 上报
   // ---------------------------------------------------------------------------
 
+  /** 常规 flush：运行中且可达时进入排空循环；已在排空则复用其结果。 */
   private async flushCycle(): Promise<{ sent: number }> {
     if (!this.running || !this.reachable || this.buffer.length === 0) {
       return { sent: 0 };
     }
-    if (this.flushInFlight) {
+    if (this.flushInFlight !== null) {
+      return this.flushInFlight;
+    }
+    const run = this.runDrain(false);
+    this.flushInFlight = run;
+    try {
+      return await run;
+    } finally {
+      this.flushInFlight = null;
+    }
+  }
+
+  /**
+   * 关闭路径排空：先等进行中的 flush（其循环检测 running=false 后退出），
+   * 再忽略 running/reachable 守卫排空剩余缓冲（尽力而为）。
+   */
+  private async shutdownDrain(): Promise<{ sent: number }> {
+    if (this.flushInFlight !== null) {
+      try {
+        await this.flushInFlight;
+      } catch (error) {
+        this.deps.logger.warn('reporter.shutdownFlushError', { error: String(error) });
+      }
+    }
+    if (this.buffer.length === 0) {
       return { sent: 0 };
     }
-    this.flushInFlight = true;
+    const run = this.runDrain(true);
+    this.flushInFlight = run;
     try {
-      // 首次 flush 前等待持久化身份加载（异步文件读，不阻塞采集）。
-      await this.ensureIdentity();
-      let sent = 0;
-      while (this.running && this.reachable && this.buffer.length > 0) {
-        const batch = this.buffer.splice(
-          0,
-          Math.min(this.batchSizeLimit, MAX_BATCH, this.buffer.length),
-        );
-        const outcome = await retryWithBackoff(
-          () => this.deps.transport.postBatch(batch),
-          this.deps.config.retry,
-          {
-            sleep: this.sleepFn,
-            random: this.randomFn,
-            shouldRetry: (error) => !(error instanceof BatchTooLargeError),
-            onAttempt: (attempt, delayMs, error) => {
-              this.deps.logger.warn('report.retry', {
-                attempt,
-                delayMs,
-                error: String(error),
-                batchSize: batch.length,
-              });
-            },
-          },
-        );
-        if (!outcome.ok) {
-          this.stats.flushFailures += 1;
-          const tooLarge = outcome.lastError instanceof BatchTooLargeError;
-          if (tooLarge) {
-            if (batch.length <= 1) {
-              this.deps.logger.error('report.oversizedDropped', { state: batch[0]?.state });
-              continue;
-            }
-            // 拆半：整批回填，下一批仅取一半（batchSizeLimit），成功后重置。
-            const half = Math.max(1, Math.ceil(batch.length / 2));
-            this.batchSizeLimit = half;
-            this.buffer.unshift(...batch);
+      return await run;
+    } finally {
+      this.flushInFlight = null;
+    }
+  }
+
+  /**
+   * 排空循环：splice 批次 → 重试发送 → 处理结果（413 拆半 / 毒信剔除 / 失败保留或丢弃）。
+   * shutdown=true 时忽略 running/reachable 守卫且每批仅单次尝试：已关闭的会话不再
+   * 循环重试（避免退避睡眠拖长退出），失败批次丢弃并计数，整体限时由 stop 的 race 兜底。
+   */
+  private async runDrain(shutdown: boolean): Promise<{ sent: number }> {
+    // 首次 flush 前等待持久化身份加载（异步文件读，不阻塞采集）。
+    await this.ensureIdentity();
+    const retry = shutdown ? { ...this.deps.config.retry, maxAttempts: 1 } : this.deps.config.retry;
+    let sent = 0;
+    while (this.buffer.length > 0 && (shutdown || (this.running && this.reachable))) {
+      const batch = this.buffer.splice(
+        0,
+        Math.min(this.batchSizeLimit, MAX_BATCH, this.buffer.length),
+      );
+      const outcome = await retryWithBackoff(() => this.deps.transport.postBatch(batch), retry, {
+        sleep: this.sleepFn,
+        random: this.randomFn,
+        shouldRetry: (error) => !(error instanceof BatchTooLargeError),
+        onAttempt: (attempt, delayMs, error) => {
+          this.deps.logger.warn('report.retry', {
+            attempt,
+            delayMs,
+            error: String(error),
+            batchSize: batch.length,
+          });
+        },
+      });
+      if (!outcome.ok) {
+        this.stats.flushFailures += 1;
+        const tooLarge = outcome.lastError instanceof BatchTooLargeError;
+        if (tooLarge) {
+          if (batch.length <= 1) {
+            this.deps.logger.error('report.oversizedDropped', { state: batch[0]?.state });
             continue;
           }
-          this.requeueOrDrop(batch);
-          this.markUnreachable();
-          return { sent };
-        }
-        const response = outcome.result;
-        if (response === undefined) {
-          this.stats.flushFailures += 1;
-          this.requeueOrDrop(batch);
-          this.markUnreachable();
-          return { sent };
-        }
-        if (!response.ok) {
-          this.handleRejection(batch, response);
+          // 拆半：整批回填，下一批仅取一半（batchSizeLimit），成功后重置。
+          const half = Math.max(1, Math.ceil(batch.length / 2));
+          this.batchSizeLimit = half;
+          this.buffer.unshift(...batch);
           continue;
         }
-        await this.applyIdentity(response);
-        this.batchSizeLimit = MAX_BATCH;
-        sent += batch.length;
-        this.stats.sent += batch.length;
+        this.requeueOrDrop(batch);
+        this.markUnreachable();
+        return { sent };
       }
-      return { sent };
-    } finally {
-      this.flushInFlight = false;
+      const response = outcome.result;
+      if (response === undefined) {
+        this.stats.flushFailures += 1;
+        this.requeueOrDrop(batch);
+        this.markUnreachable();
+        return { sent };
+      }
+      if (!response.ok) {
+        this.handleRejection(batch, response);
+        continue;
+      }
+      await this.applyIdentity(response);
+      this.batchSizeLimit = MAX_BATCH;
+      sent += batch.length;
+      this.stats.sent += batch.length;
     }
+    return { sent };
   }
 
   private handleRejection(batch: ReportEnvelope[], response: ReportResponse): void {
@@ -420,7 +471,7 @@ export class Reporter {
     }
     // 已停止：重试已耗尽，丢弃并计数（下一会话会采集刷新后的新状态）。
     this.stats.dropped += batch.length;
-    this.deps.logger.warn('report.shutdownDropped', { count: batch.length });
+    this.deps.logger.warn('report.shutdownDropped', { dropped: batch.length });
   }
 
   private markUnreachable(): void {
@@ -429,7 +480,9 @@ export class Reporter {
     }
     this.reachable = false;
     this.deps.logger.error('transport.unreachable', { serverUrl: this.deps.config.serverUrl });
-    void this.runRecovery();
+    void this.runRecovery().catch((error) => {
+      this.deps.logger.error('recovery.unexpectedError', { error: String(error) });
+    });
   }
 
   /** 断线恢复：按退避间隔探测健康，恢复后触发 flush。 */
@@ -442,7 +495,7 @@ export class Reporter {
       let attempt = 1;
       while (this.running && !this.reachable) {
         const delayMs = computeBackoffDelay(this.deps.config.retry, attempt, this.randomFn);
-        await this.sleepFn(delayMs);
+        await this.recoverySleep(delayMs);
         if (!this.running || this.reachable) {
           break;
         }
@@ -455,7 +508,9 @@ export class Reporter {
               attempt,
               serverUrl: this.deps.config.serverUrl,
             });
-            await this.flushCycle();
+            await this.flushCycle().catch((error) => {
+              this.deps.logger.error('report.flushUnexpectedError', { error: String(error) });
+            });
           }
         } catch {
           this.deps.logger.debug('transport.probeFailed', { attempt });
@@ -465,6 +520,44 @@ export class Reporter {
     } finally {
       this.recoveryInFlight = false;
     }
+  }
+
+  /** 唤醒恢复探测的退避睡眠（关闭路径调用，避免退出挂起在退避定时器上）。 */
+  private wakeRecovery(): void {
+    const waiters = this.recoveryWaiters.splice(0, this.recoveryWaiters.length);
+    for (const wake of waiters) {
+      wake();
+    }
+  }
+
+  /** 从等待列表移除一个唤醒句柄（定时器触发或被唤醒后调用）。 */
+  private removeRecoveryWaiter(wake: () => void): void {
+    const index = this.recoveryWaiters.indexOf(wake);
+    if (index >= 0) {
+      this.recoveryWaiters.splice(index, 1);
+    }
+  }
+
+  /**
+   * 恢复探测的退避睡眠。注入 sleep（测试确定性）直通；默认为可唤醒的真实定时器——
+   * 否则关闭时进行中的退避定时器（默认至 30s）会挂起进程退出。
+   */
+  private recoverySleep(ms: number): Promise<void> {
+    if (this.deps.sleep !== undefined) {
+      return this.deps.sleep(ms);
+    }
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        clearTimeout(timer);
+        this.removeRecoveryWaiter(wake);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.removeRecoveryWaiter(wake);
+        resolve();
+      }, ms);
+      this.recoveryWaiters.push(wake);
+    });
   }
 
   /** 采用 server 分配的 uuid 并持久化；持久化失败降级为仅内存持有（明确日志）。 */
@@ -484,7 +577,10 @@ export class Reporter {
       assignedAt: this.now(),
       serverUrl: this.deps.config.serverUrl,
     };
-    const result = await this.deps.identityStore.save(next);
+    // 跟踪异步身份写：stop 的限时 race 可能截断 drain，但 pendingWrites 仍等其落盘。
+    const write = this.deps.identityStore.save(next);
+    this.trackWrite(write);
+    const result = await write;
     if (result.ok) {
       this.identity = next;
       this.deps.logger.info('identity.persisted', {
@@ -500,4 +596,18 @@ export class Reporter {
       });
     }
   }
+}
+
+/**
+ * 关闭排空的限时 guard：真实定时器。不能使用注入的测试 sleep——
+ * 即时的注入 sleep 会让 race 立即 resolve，排空从未真正发生。
+ * 返回的 cancel 保证无论 race 谁先完成都不遗留定时器句柄。
+ */
+function shutdownTimer(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let resolveTimer: () => void;
+  const promise = new Promise<void>((resolve) => {
+    resolveTimer = resolve;
+  });
+  const timer = setTimeout(() => resolveTimer(), ms);
+  return { promise, cancel: () => clearTimeout(timer) };
 }
