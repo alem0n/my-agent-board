@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-13
+
 ### Added
 
 - **看板派生层 P0（REQ-014，[docs/BOARD.md](docs/BOARD.md)）**：server 端新增纯函数派生 `src/domain/derivation.ts`，从既有 42 项状态元数据（不涉内容字段）派生四类展板信息——**运行相位**（A1：`offline`/`waiting-human`/`tool`/`compacting`/`streaming`/`active`/`idle`，按未闭合的 `ui_prompt_start`/`tool_execution_start`/`message_start`/`session_before_compact` 标记与 `session_start` 边界计算）、**注意队列**（A2：等待人工携带已等时长、run 出错、provider 4xx/5xx 分类、压缩失败/频繁、工具错误率>30%、上下文>85%、疑似卡死、离线无 shutdown 疑似崩溃）、**符号化健康度**（A3：`attention`/`watch`/`good`/`unknown` 四级，展示层映射为 `!`/`◐`/`●`/`—`）、**最近 run 摘要**（A4：outcome、轮数、工具调用数、token、用时）。派生字段随 `/v1/agents` 列表与 `/v1/agents/:uuid` 详情响应暴露（详情新增 `status` 块）。Web UI 同步升级：顶部 KPI 条（需处理/观察/良好/离线计数）、列表新增健康符号与相位列并按关注度排序（需处理→观察→良好→无数据，同档按 lastSeen 倒序）、详情页新增「运行状态」块（相位、健康度+原因清单、run 摘要）。全部为文本符号呈现，无颜色依赖。34 条派生单元测试 + e2e/API 契约断言。

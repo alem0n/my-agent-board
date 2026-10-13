@@ -1,6 +1,6 @@
 {
   "name": "my-agent-board",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "client-server 架构的 pi agent 状态监控系统：client 为 pi 扩展（采集全部 42 项受支持状态上报），server 聚合并提供查询 API",
   "type": "module",
   "engines": {
